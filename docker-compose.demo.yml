@@ -1,0 +1,21 @@
+# Overlay that runs the whole stack with NO credentials.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.demo.yml up --build
+#
+# Postgres, the migrations, SSE streaming, the approval gate, the audit trail
+# and the live sidebar are all the real code. Only the LiteLLM proxy and the
+# SecOps MCP server are simulated in-process, so every answer is invented.
+#
+# Never layer this over a real deployment.
+
+services:
+  backend:
+    environment:
+      DEMO_MODE: "true"
+      APP_ENV: dev
+      LOG_LEVEL: INFO
+      # Cookies are signed with a throwaway key in demo mode; no SECRET_KEY,
+      # no LLM proxy, no MCP URL and no sa.json are needed.
+      UVICORN_WORKERS: "1"
+      # Friendly label under each answer, instead of the raw gateway model id.
+      LLM_MODEL_DISPLAY_NAME: "Claude Opus 4.6"

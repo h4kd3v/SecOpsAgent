@@ -1,0 +1,24 @@
+.env
+*.env
+!.env.example
+
+# The Google service-account key. Never commit this.
+# Ignore the contents but keep the folder, so the compose bind mount has a
+# mount point on a fresh clone.
+secrets/*
+!secrets/README.md
+sa.json
+*.sa.json
+
+__pycache__/
+*.py[cod]
+.venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+node_modules/
+dist/
+tsconfig.tsbuildinfo
+*.local
+.DS_Store

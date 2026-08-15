@@ -1,0 +1,69 @@
+# No `version:` key — obsolete since Compose v2.
+name: secops-agent
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      # Read on FIRST boot only, to initialise the cluster inside the pgdata
+      # volume. Changing them later does nothing until `down -v`.
+      POSTGRES_USER: ${POSTGRES_USER:-secops}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-secops}
+      POSTGRES_DB: ${POSTGRES_DB:-secops_chat}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # Deliberately NOT published to the host. Use `docker compose exec postgres psql`.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-secops} -d ${POSTGRES_DB:-secops_chat}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    env_file:
+      # Absent in demo mode, so don't hard-fail on it.
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-secops}:${POSTGRES_PASSWORD:-secops}@postgres:5432/${POSTGRES_DB:-secops_chat}
+      GOOGLE_SA_FILE: /run/secrets/sa.json
+    volumes:
+      # The directory, not the file: a bind mount of a missing file silently
+      # creates a *directory* with that name, which fails in a confusing way.
+      # Mounting the folder means an empty ./secrets is simply an absent key.
+      - ./secrets:/run/secrets:ro
+    extra_hosts:
+      # Lets MCP_SERVER_URL point at a server running on the host during
+      # testing, e.g. http://host.docker.internal:3001/mcp
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/health/live', timeout=3).status==200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+
+  frontend:
+    build:
+      context: ./frontend
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  pgdata:

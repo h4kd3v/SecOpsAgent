@@ -3,6 +3,8 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Invocation, Message } from "../types";
 import { ApprovalPanel } from "./ApprovalPanel";
+import { IconCheck, IconCopy, IconRetry, IconSend, IconSparkle, IconStop } from "./Icons";
+import { PromptCards, PromptChips } from "./SuggestedPrompts";
 import { ToolCard } from "./ToolCard";
 import { UsageFooter } from "./UsageFooter";
 import type { LiveState } from "../hooks/useChatStream";
@@ -17,6 +19,7 @@ interface Props {
   warning: string | null;
   totalTokens: number;
   modelDisplayName: string;
+  sessionInitials: string;
   onSend: (text: string) => void;
   onDecide: (d: { invocation_id: string; decision: "approve" | "deny" }[]) => void;
   onStop: () => void;
@@ -25,6 +28,7 @@ interface Props {
 export function ChatView(props: Props) {
   const { messages, invocations, live, pending, busy } = props;
   const [draft, setDraft] = useState("");
+  const [copied, setCopied] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -38,54 +42,122 @@ export function ChatView(props: Props) {
     props.onSend(text);
   };
 
+  const pick = (text: string) => {
+    if (busy) return;
+    props.onSend(text);
+  };
+
+  const copy = (id: string, text: string) => {
+    void navigator.clipboard.writeText(text).then(() => {
+      setCopied(id);
+      window.setTimeout(() => setCopied((c) => (c === id ? null : c)), 1600);
+    });
+  };
+
   // `tool` rows are the model's view of the transcript; the analyst sees the
   // richer invocation card instead, anchored to the assistant turn that asked.
   const visible = messages.filter((m) => m.role === "user" || m.role === "assistant");
+  const lastUserPrompt = [...visible].reverse().find((m) => m.role === "user")?.content ?? "";
+  const lastId = visible[visible.length - 1]?.id;
+  const empty = visible.length === 0 && !live.streaming;
 
   return (
     <div className="chat">
       <div className="messages">
-        {visible.length === 0 && !live.streaming && (
+        {empty && (
           <div className="empty-state">
-            <h2>SecOps Agent</h2>
+            <span className="empty-mark">
+              <IconSparkle size={26} />
+            </span>
+            <h2>How can I help with your investigation?</h2>
             <p>
               Ask about detections, alerts, entities or IOCs. Every answer is grounded in
               live SecOps data, and each tool call is shown with its arguments and output.
             </p>
+            <PromptCards onPick={pick} disabled={busy} />
           </div>
         )}
 
         {visible.map((message) => (
-          <div key={message.id} className={`bubble ${message.role}`}>
-            <div className="bubble-role">{message.role === "user" ? "You" : "Agent"}</div>
-            <div className="bubble-body">
-              {message.role === "assistant" ? (
-                <Markdown remarkPlugins={[remarkGfm]}>{message.content ?? ""}</Markdown>
-              ) : (
-                message.content
-              )}
-            </div>
-            {invocations
-              .filter((i) => i.tool_call_id && messageOwnsCall(message, i))
-              .map((i) => (
-                <ToolCard key={i.id} invocation={i} />
-              ))}
-            {message.role === "assistant" && (
-              <UsageFooter
-                model={message.model}
-                usage={message.token_usage}
-                displayNameOverride={props.modelDisplayName}
-              />
+          <div key={message.id} className={`turn ${message.role}`}>
+            {message.role === "user" ? (
+              <div className="turn-head">
+                <span className="avatar user-avatar">{props.sessionInitials}</span>
+                <div className="user-text">{message.content}</div>
+                <button
+                  className="turn-action"
+                  title="Copy prompt"
+                  aria-label="Copy prompt"
+                  onClick={() => copy(message.id, message.content ?? "")}
+                >
+                  {copied === message.id ? <IconCheck size={15} /> : <IconCopy size={15} />}
+                </button>
+              </div>
+            ) : (
+              <>
+                {/* A turn that only carried tool calls has no prose. Rendering
+                    the label and an empty card for it leaves a blank white
+                    strip above the tool card that reads as a broken answer. */}
+                {hasText(message) && (
+                  <>
+                    <div className="agent-label">
+                      <IconSparkle size={13} />
+                      SecOps Agent
+                    </div>
+                    <div className="agent-body">
+                      <Markdown remarkPlugins={[remarkGfm]}>{message.content ?? ""}</Markdown>
+                    </div>
+                  </>
+                )}
+                {invocations
+                  .filter((i) => i.tool_call_id && messageOwnsCall(message, i))
+                  .map((i) => (
+                    <ToolCard key={i.id} invocation={i} />
+                  ))}
+                {hasText(message) && (
+                <div className="turn-footer">
+                  <div className="turn-actions">
+                    <button
+                      className="turn-action"
+                      title="Copy answer"
+                      aria-label="Copy answer"
+                      onClick={() => copy(message.id, message.content ?? "")}
+                    >
+                      {copied === message.id ? <IconCheck size={15} /> : <IconCopy size={15} />}
+                    </button>
+                    {message.id === lastId && lastUserPrompt && (
+                      <button
+                        className="turn-action labelled"
+                        title="Ask the same question again"
+                        disabled={busy}
+                        onClick={() => pick(lastUserPrompt)}
+                      >
+                        <IconRetry size={15} />
+                        Retry
+                      </button>
+                    )}
+                  </div>
+                  <UsageFooter
+                    model={message.model}
+                    usage={message.token_usage}
+                    displayNameOverride={props.modelDisplayName}
+                  />
+                </div>
+                )}
+              </>
             )}
           </div>
         ))}
 
         {live.streaming && (
-          <div className="bubble assistant">
-            <div className="bubble-role">Agent</div>
-            <div className="bubble-body">
+          <div className="turn assistant">
+            <div className="agent-label">
+              <IconSparkle size={13} />
+              SecOps Agent
+            </div>
+            <div className="agent-body">
               <Markdown remarkPlugins={[remarkGfm]}>{live.assistantText}</Markdown>
-              {!live.assistantText && <span className="cursor">▊</span>}
+              {!live.assistantText && <span className="cursor" />}
             </div>
             {live.invocations.map((i) => (
               <ToolCard key={i.id} invocation={i} />
@@ -102,37 +174,53 @@ export function ChatView(props: Props) {
         <div ref={bottomRef} />
       </div>
 
-      {props.totalTokens > 0 && (
-        <div className="conversation-total">
-          {props.totalTokens.toLocaleString()} tokens used in this conversation
-        </div>
-      )}
-
-      <div className="composer">
-        <textarea
-          value={draft}
-          placeholder="Ask about an alert, entity, or detection…"
-          rows={1}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              submit();
-            }
-          }}
-        />
-        {busy ? (
-          <button className="btn-stop" onClick={props.onStop}>
-            Stop
-          </button>
-        ) : (
-          <button className="btn-send" onClick={submit} disabled={!draft.trim()}>
-            Send
-          </button>
+      <div className="composer-dock">
+        {props.totalTokens > 0 && (
+          <div className="conversation-total">
+            {props.totalTokens.toLocaleString()} tokens used in this conversation
+          </div>
         )}
+
+        {!empty && <PromptChips onPick={pick} disabled={busy} />}
+
+        <div className="composer">
+          <span className="composer-mark">
+            <IconSparkle size={16} />
+          </span>
+          <textarea
+            value={draft}
+            placeholder="What's on your mind?…"
+            rows={1}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                submit();
+              }
+            }}
+          />
+          {busy ? (
+            <button className="btn-round stop" onClick={props.onStop} title="Stop">
+              <IconStop size={18} />
+            </button>
+          ) : (
+            <button
+              className="btn-round"
+              onClick={submit}
+              disabled={!draft.trim()}
+              title="Send"
+            >
+              <IconSend size={18} />
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
+}
+
+function hasText(message: Message): boolean {
+  return (message.content ?? "").trim().length > 0;
 }
 
 function messageOwnsCall(message: Message, invocation: Invocation): boolean {

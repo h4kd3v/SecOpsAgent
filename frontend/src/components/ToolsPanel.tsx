@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
 import type { ToolCatalog } from "../types";
+import { IconClose } from "./Icons";
 
 function humanAge(seconds: number | null): string {
   if (seconds == null) return "unknown";
@@ -47,8 +48,8 @@ export function ToolsPanel({ onClose }: { onClose: () => void }) {
             <button className="btn-refresh" onClick={() => load(true)} disabled={busy}>
               {busy ? "Refreshing…" : "Refresh"}
             </button>
-            <button className="panel-close" onClick={onClose}>
-              ×
+            <button className="panel-close" onClick={onClose} aria-label="Close">
+              <IconClose size={18} />
             </button>
           </div>
         </div>

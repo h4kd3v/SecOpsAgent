@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "./api";
 import { ChatView } from "./components/ChatView";
+import { IconTools } from "./components/Icons";
+import { SettingsPanel } from "./components/SettingsPanel";
 import { Sidebar } from "./components/Sidebar";
 import { ToolsPanel } from "./components/ToolsPanel";
 import { useChatStream } from "./hooks/useChatStream";
@@ -14,6 +16,7 @@ export default function App() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [queued, setQueued] = useState<string | null>(null);
   const [showTools, setShowTools] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
 
   // No login screen: the first request mints an anonymous session and drops a
   // signed cookie. Returning visitors get their existing sidebar back.
@@ -50,6 +53,20 @@ export default function App() {
     if (activeId === id) setActiveId(null);
   };
 
+  const clearAll = async () => {
+    const count = sidebar.conversations.length;
+    if (!count) return;
+    if (
+      !window.confirm(
+        `Archive all ${count} conversation${count > 1 ? "s" : ""}? ` +
+          "They leave the sidebar; the transcripts stay in the database for audit.",
+      )
+    )
+      return;
+    await Promise.all(sidebar.conversations.map((c) => api.archiveConversation(c.id)));
+    setActiveId(null);
+  };
+
   const send = async (text: string) => {
     // First message of a fresh session: create the thread, then let the effect
     // below fire once `useChatStream` has rebound to the new conversation id.
@@ -79,33 +96,57 @@ export default function App() {
   }
   if (!session) return <div className="boot">Starting…</div>;
 
+  const initials =
+    session.label
+      .split(/\s+/)
+      .map((word) => word[0])
+      .join("")
+      .slice(0, 2)
+      .toUpperCase() || "A";
+
   return (
     <div className="app">
-      <Sidebar
-        conversations={sidebar.conversations}
-        activeId={activeId}
-        session={session}
-        live={sidebar.live}
-        onSelect={setActiveId}
-        onNew={newConversation}
-        onArchive={archive}
-        onShowTools={() => setShowTools(true)}
-      />
-      <ChatView
-        messages={chat.messages}
-        invocations={chat.invocations}
-        live={chat.live}
-        pending={chat.pending}
-        busy={chat.busy}
-        error={chat.error}
-        warning={chat.warning}
-        totalTokens={chat.totalTokens}
-        modelDisplayName={config?.model_display_name ?? ""}
-        onSend={send}
-        onDecide={chat.decide}
-        onStop={chat.stop}
-      />
+      <div className="shell">
+        <Sidebar
+          conversations={sidebar.conversations}
+          activeId={activeId}
+          session={session}
+          live={sidebar.live}
+          onSelect={setActiveId}
+          onNew={newConversation}
+          onArchive={archive}
+          onClearAll={clearAll}
+          onOpenSettings={() => setShowSettings(true)}
+        />
+        <ChatView
+          messages={chat.messages}
+          invocations={chat.invocations}
+          live={chat.live}
+          pending={chat.pending}
+          busy={chat.busy}
+          error={chat.error}
+          warning={chat.warning}
+          totalTokens={chat.totalTokens}
+          modelDisplayName={config?.model_display_name ?? ""}
+          sessionInitials={initials}
+          onSend={send}
+          onDecide={chat.decide}
+          onStop={chat.stop}
+        />
+        <button className="tools-tab" onClick={() => setShowTools(true)}>
+          <IconTools size={16} />
+          <span>MCP Tools</span>
+        </button>
+      </div>
+
       {showTools && <ToolsPanel onClose={() => setShowTools(false)} />}
+      {showSettings && (
+        <SettingsPanel
+          config={config}
+          session={session}
+          onClose={() => setShowSettings(false)}
+        />
+      )}
     </div>
   );
 }

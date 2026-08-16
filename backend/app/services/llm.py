@@ -130,8 +130,12 @@ class _ToolCallAccumulator:
     def __init__(self) -> None:
         self._by_index: dict[int, dict[str, Any]] = {}
 
-    def add(self, deltas: Any) -> None:
+    def add(self, deltas: Any) -> list[int]:
+        """Merge a batch of deltas; returns the indices they touched."""
+        touched: list[int] = []
         for delta in deltas or []:
+            if delta.index not in touched:
+                touched.append(delta.index)
             slot = self._by_index.setdefault(
                 delta.index, {"id": "", "type": "function", "function": {"name": "", "arguments": ""}}
             )
@@ -144,6 +148,12 @@ class _ToolCallAccumulator:
                 slot["function"]["name"] += fn.name
             if fn.arguments:
                 slot["function"]["arguments"] += fn.arguments
+        return touched
+
+    def snapshot(self, index: int) -> dict[str, Any]:
+        slot = self._by_index.get(index, {})
+        fn = slot.get("function", {})
+        return {"name": fn.get("name", ""), "arguments": fn.get("arguments", "")}
 
     def result(self) -> list[dict[str, Any]]:
         return [self._by_index[i] for i in sorted(self._by_index)]
@@ -154,12 +164,18 @@ async def stream_completion(
     tools: list[dict[str, Any]] | None,
     on_token: Any,
     on_reasoning: Any = None,
+    on_tool_delta: Any = None,
 ) -> StreamedTurn:
     """Run one completion, invoking `on_token(text)` per text delta.
 
     `on_reasoning` receives the model's analysis deltas as they arrive, so the
     analyst watches the working rather than a spinner. Optional because not
     every gateway or model emits any.
+
+    `on_tool_delta` receives each tool call as it is being written. The query
+    the model composes is model output like any other, and waiting for the
+    round to finish before showing it hides the most interesting part of an
+    investigation: which question it decided to ask SecOps.
     """
     kwargs: dict[str, Any] = {
         "model": settings.llm_model_name,
@@ -202,7 +218,10 @@ async def stream_completion(
             turn.reasoning += thought
             await on_reasoning(thought)
         if delta.tool_calls:
-            accumulator.add(delta.tool_calls)
+            touched = accumulator.add(delta.tool_calls)
+            if on_tool_delta is not None:
+                for index in touched:
+                    await on_tool_delta(index, accumulator.snapshot(index))
 
     turn.tool_calls = [tc for tc in accumulator.result() if tc["function"]["name"]]
     return turn

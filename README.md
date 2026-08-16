@@ -353,7 +353,7 @@ TEST_DATABASE_URL='postgresql+asyncpg://test:test@localhost:55433/test' \
     .venv/bin/pytest tests -q                  # + integration tests
 ```
 
-93 tests covering the things that actually bite:
+99 tests covering the things that actually bite:
 
 - **Streaming, through the real ASGI app over HTTP** — all 500 chunks of a long
   answer arrive (not just the first), content containing raw newlines, blank
@@ -365,7 +365,13 @@ TEST_DATABASE_URL='postgresql+asyncpg://test:test@localhost:55433/test' \
   the result and writes again; all of it reaches the browser in arrival order,
   not just the first round and the final answer. Reasoning deltas, where the
   gateway exposes them, are streamed and stored but never replayed to the
-  model.
+  model, and the tool query streams as the model composes it.
+- **Twenty analysts at once** — twenty turns genuinely concurrent over real
+  cookies: no stream, transcript or sidebar carries another analyst's work,
+  another session gets a 404 rather than a thread it does not own, the event
+  bus fans out only to the owning session, and the single shared Chronicle
+  session pairs each reply with its own caller when replies finish out of
+  order.
 - **Stopping a turn** — cancelling the response generator (what Starlette does
   on disconnect) cancels the completion and every in-flight MCP call, keeps the
   partial answer already on screen, and leaves no `tool_call` without a reply —

@@ -107,6 +107,18 @@ class Settings(BaseSettings):
     rate_limit_messages_per_minute: int = 20
     cors_origins: str = ""
 
+    # --- Database pool ------------------------------------------------------
+    # Sized against concurrent *turns*, not requests: each in-flight turn holds
+    # a request-scoped connection plus one for the streaming response for its
+    # whole duration, so ~20 analysts answering at once need ~40. Default
+    # Postgres allows 100 connections, so 40+20 leaves room for psql, the event
+    # bus listener and a second backend replica.
+    db_pool_size: int = 40
+    db_max_overflow: int = 20
+    # Fail fast rather than making an analyst stare at a dead composer for
+    # thirty seconds before the turn errors anyway.
+    db_pool_timeout: float = 10.0
+
     @field_validator("cors_origins")
     @classmethod
     def _strip(cls, v: str) -> str:

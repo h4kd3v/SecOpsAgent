@@ -66,7 +66,7 @@ async def make_context(db) -> TurnContext:
 async def test_a_one_word_prompt_is_stored_before_the_model_runs(db, wired, monkeypatch):
     """Even when the model immediately fails, the question itself is on record."""
 
-    async def explodes(messages, tools, on_token, on_reasoning=None):
+    async def explodes(messages, tools, on_token, on_reasoning=None, on_tool_delta=None):
         raise RuntimeError("gateway on fire")
 
     monkeypatch.setattr(llm, "stream_completion", explodes)
@@ -79,7 +79,7 @@ async def test_a_one_word_prompt_is_stored_before_the_model_runs(db, wired, monk
 
 
 async def test_a_failed_turn_keeps_its_reason(db, wired, monkeypatch):
-    async def explodes(messages, tools, on_token, on_reasoning=None):
+    async def explodes(messages, tools, on_token, on_reasoning=None, on_tool_delta=None):
         raise RuntimeError("Error code: 429 - insufficient_quota")
 
     monkeypatch.setattr(llm, "stream_completion", explodes)
@@ -100,7 +100,7 @@ async def test_a_failed_turn_keeps_its_reason(db, wired, monkeypatch):
 async def test_the_raw_provider_error_reaches_the_audit_trail(db, wired, monkeypatch):
     """The analyst gets a sentence; the operator needs the payload."""
 
-    async def explodes(messages, tools, on_token, on_reasoning=None):
+    async def explodes(messages, tools, on_token, on_reasoning=None, on_tool_delta=None):
         raise RuntimeError("Error code: 429 - {'type': 'insufficient_quota'}")
 
     monkeypatch.setattr(llm, "stream_completion", explodes)
@@ -119,7 +119,7 @@ async def test_the_raw_provider_error_reaches_the_audit_trail(db, wired, monkeyp
 
 
 async def test_tokens_streamed_before_a_failure_are_kept(db, wired, monkeypatch):
-    async def half_answers(messages, tools, on_token, on_reasoning=None):
+    async def half_answers(messages, tools, on_token, on_reasoning=None, on_tool_delta=None):
         await on_token("Twelve alerts fired, ")
         raise RuntimeError("connection reset")
 
@@ -140,7 +140,7 @@ async def test_a_failed_turn_is_still_findable_in_the_sidebar(db, wired, monkeyp
     """Titling asks the model for a summary — the very thing that just failed.
     A thread stuck on "New conversation" is one the analyst cannot find again."""
 
-    async def explodes(messages, tools, on_token, on_reasoning=None):
+    async def explodes(messages, tools, on_token, on_reasoning=None, on_tool_delta=None):
         raise RuntimeError("gateway on fire")
 
     async def never_call_me(*args, **kwargs):

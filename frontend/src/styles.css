@@ -601,6 +601,23 @@ body {
 .tool-status { color: var(--text-dim); }
 .tool-latency { margin-left: auto; color: var(--text-mute); font-size: 0.78rem; }
 .tool-body { border-top: 1px solid var(--line); padding: 0.6rem 0.75rem; }
+
+/* The question the model asked, visible without expanding the card. */
+.tool-query {
+  padding: 0 0.75rem 0.55rem 1.85rem;
+  margin-top: -0.15rem;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tool-card.pending { border-style: dashed; border-color: var(--accent-soft); }
+.tool-head.as-row { cursor: default; }
+.tool-head.as-row:hover { background: none; }
+.cursor.inline { width: 6px; height: 12px; vertical-align: -1px; margin-left: 1px; }
 .tool-section-label {
   font-size: 0.68rem;
   text-transform: uppercase;

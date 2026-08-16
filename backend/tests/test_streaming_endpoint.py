@@ -104,7 +104,7 @@ def scripted(chunks: list[str], tool_calls: list | None = None):
     """One completion that emits `chunks` verbatim, then optionally tool calls."""
     state = {"n": 0}
 
-    async def fake_stream(messages, tools, on_token, on_reasoning=None):
+    async def fake_stream(messages, tools, on_token, on_reasoning=None, on_tool_delta=None):
         state["n"] += 1
         result = llm.StreamedTurn()
         if state["n"] == 1 and tool_calls:
@@ -216,7 +216,7 @@ async def test_full_tool_output_reaches_the_model(wired, monkeypatch):
 
     seen: list[str] = []
 
-    async def capture(messages, tools, on_token, on_reasoning=None):
+    async def capture(messages, tools, on_token, on_reasoning=None, on_tool_delta=None):
         result = llm.StreamedTurn()
         if not seen:
             seen.append("first")
@@ -248,7 +248,7 @@ async def test_hitting_the_output_token_limit_is_reported_as_such(wired, monkeyp
     client, conversation_id = wired
     _use(monkeypatch, FakeMcp())
 
-    async def truncated(messages, tools, on_token, on_reasoning=None):
+    async def truncated(messages, tools, on_token, on_reasoning=None, on_tool_delta=None):
         await on_token("This answer stops mid-")
         result = llm.StreamedTurn()
         result.content = "This answer stops mid-"
@@ -288,7 +288,7 @@ async def test_usage_and_model_are_recorded_and_returned(wired, monkeypatch):
     client, conversation_id = wired
     _use(monkeypatch, FakeMcp())
 
-    async def with_usage(messages, tools, on_token, on_reasoning=None):
+    async def with_usage(messages, tools, on_token, on_reasoning=None, on_tool_delta=None):
         await on_token("answer")
         result = llm.StreamedTurn()
         result.content = "answer"
@@ -321,7 +321,7 @@ async def test_usage_is_estimated_when_the_gateway_omits_it(wired, monkeypatch):
     client, conversation_id = wired
     _use(monkeypatch, FakeMcp())
 
-    async def no_usage(messages, tools, on_token, on_reasoning=None):
+    async def no_usage(messages, tools, on_token, on_reasoning=None, on_tool_delta=None):
         await on_token("hello there")
         result = llm.StreamedTurn()
         result.content = "hello there"
@@ -402,7 +402,7 @@ async def test_every_round_of_a_multi_tool_turn_reaches_the_client(wired, monkey
     ]
     state = {"n": 0}
 
-    async def multi_round(messages, tools, on_token, on_reasoning=None):
+    async def multi_round(messages, tools, on_token, on_reasoning=None, on_tool_delta=None):
         script = rounds[min(state["n"], len(rounds) - 1)]
         state["n"] += 1
         for chunk in script["tokens"]:
@@ -432,7 +432,7 @@ async def test_reasoning_deltas_are_streamed_and_stored(wired, monkeypatch):
     client, conversation_id = wired
     _use(monkeypatch, FakeMcp())
 
-    async def thinks_aloud(messages, tools, on_token, on_reasoning=None):
+    async def thinks_aloud(messages, tools, on_token, on_reasoning=None, on_tool_delta=None):
         await on_reasoning("The alert count looks high. ")
         await on_token("Twelve alerts. ")
         await on_reasoning("Worth checking the host.")
@@ -457,3 +457,57 @@ async def test_reasoning_deltas_are_streamed_and_stored(wired, monkeypatch):
     # Working, not something the assistant said: it must not go back up.
     wire = repo.to_wire(history)
     assert not any("alert count looks high" in str(m) for m in wire)
+
+
+async def test_the_query_streams_as_the_model_writes_it(wired, monkeypatch):
+    """Tool arguments are model output too.
+
+    They used to be accumulated in silence and revealed only once the round
+    ended, which hides the most interesting part of an investigation: the
+    question the model decided to ask SecOps.
+    """
+    client, conversation_id = wired
+    _use(monkeypatch, FakeMcp())
+
+    class Delta:
+        def __init__(self, index, id=None, name=None, arguments=None):
+            self.index = index
+            self.id = id
+            self.function = type("F", (), {"name": name, "arguments": arguments})()
+
+    async def writes_a_query(messages, tools, on_token, on_reasoning=None, on_tool_delta=None):
+        from app.services.llm import _ToolCallAccumulator
+
+        accumulator = _ToolCallAccumulator()
+        pieces = [
+            Delta(0, id="c1", name="search_udm", arguments=""),
+            Delta(0, arguments='{"query": "ip'),
+            Delta(0, arguments='=1.2.3.4 AND'),
+            Delta(0, arguments=' port=445"}'),
+        ]
+        for piece in pieces:
+            for index in accumulator.add([piece]):
+                await on_tool_delta(index, accumulator.snapshot(index))
+        result = llm.StreamedTurn()
+        result.tool_calls = accumulator.result()
+        if any(m["role"] == "tool" for m in messages):
+            result.tool_calls = []
+            await on_token("Nothing on that port.")
+            result.content = "Nothing on that port."
+        return result
+
+    monkeypatch.setattr(llm, "stream_completion", writes_a_query)
+    events = await collect(client, conversation_id, "check 1.2.3.4")
+
+    drafts = [e for e in events if e.get("type") == "tool_call_delta"]
+    assert len(drafts) >= 4, "the query arrived in one lump, not as written"
+    assert drafts[0]["name"] == "search_udm"
+    # Each frame carries the query as far as it has been written.
+    assert drafts[1]["arguments"] == '{"query": "ip'
+    assert drafts[-1]["arguments"] == '{"query": "ip=1.2.3.4 AND port=445"}'
+
+    # And the draft is superseded by a real, audited invocation.
+    real = [e for e in events if e.get("type") == "tool_call"]
+    assert real and real[0]["invocation"]["arguments"] == {
+        "query": "ip=1.2.3.4 AND port=445"
+    }

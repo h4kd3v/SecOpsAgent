@@ -11,7 +11,10 @@ import type { Invocation, Message, StreamEvent } from "../types";
 export type LiveSegment =
   | { kind: "text"; key: string; text: string }
   | { kind: "reasoning"; key: string; text: string }
-  | { kind: "tool"; key: string; invocation: Invocation };
+  | { kind: "tool"; key: string; invocation: Invocation }
+  // A tool call the model is still writing. Replaced by the real card as soon
+  // as the call is authorised and dispatched.
+  | { kind: "draft"; key: string; index: number; name: string; args: string };
 
 export interface LiveState {
   segments: LiveSegment[];
@@ -81,11 +84,31 @@ export function useChatStream(conversationId: string | null, onTitle: (t: string
             segments: appendText(l.segments, "reasoning", event.text),
           }));
           break;
+        case "tool_call_delta":
+          setLive((l) => {
+            const at = l.segments.findIndex(
+              (s) => s.kind === "draft" && s.index === event.index,
+            );
+            const draft: LiveSegment = {
+              kind: "draft",
+              key: `draft-${event.index}`,
+              index: event.index,
+              name: event.name,
+              args: event.arguments,
+            };
+            if (at === -1) return { ...l, segments: [...l.segments, draft] };
+            const segments = [...l.segments];
+            segments[at] = draft;
+            return { ...l, segments };
+          });
+          break;
         case "tool_call":
           setLive((l) => ({
             ...l,
+            // Drafts for this round are superseded the moment real invocation
+            // rows exist; keeping both would show the same call twice.
             segments: [
-              ...l.segments,
+              ...l.segments.filter((s) => s.kind !== "draft"),
               {
                 kind: "tool",
                 key: `tool-${event.invocation.id}`,

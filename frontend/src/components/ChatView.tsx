@@ -12,6 +12,7 @@ import {
   IconSparkle,
   IconStop,
 } from "./Icons";
+import { PendingToolCard } from "./PendingToolCard";
 import { ReasoningBlock } from "./ReasoningBlock";
 import { PromptCards, PromptChips } from "./SuggestedPrompts";
 import { ToolCard } from "./ToolCard";
@@ -187,6 +188,12 @@ export function ChatView(props: Props) {
             {live.segments.map((segment) =>
               segment.kind === "tool" ? (
                 <ToolCard key={segment.key} invocation={segment.invocation} />
+              ) : segment.kind === "draft" ? (
+                <PendingToolCard
+                  key={segment.key}
+                  name={segment.name}
+                  arguments={segment.args}
+                />
               ) : segment.kind === "reasoning" ? (
                 <ReasoningBlock key={segment.key} text={segment.text} live />
               ) : (
@@ -259,7 +266,11 @@ export function ChatView(props: Props) {
 
 /** Total characters streamed so far — the scroll trigger while a turn runs. */
 function liveLength(segments: LiveState["segments"]): number {
-  return segments.reduce((n, s) => n + (s.kind === "tool" ? 0 : s.text.length), 0);
+  return segments.reduce(
+    (n, s) =>
+      n + (s.kind === "tool" ? 0 : s.kind === "draft" ? s.args.length : s.text.length),
+    0,
+  );
 }
 
 function hasText(message: Message): boolean {

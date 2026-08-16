@@ -197,7 +197,7 @@ async def _drive(ctx: TurnContext) -> AsyncIterator[dict[str, Any]]:
         # Text and analysis share one queue so they reach the browser in the
         # order the gateway produced them. Two queues would let the UI show
         # the conclusion above the working that led to it.
-        queue: asyncio.Queue[tuple[str, str] | None] = asyncio.Queue()
+        queue: asyncio.Queue[tuple[str, Any] | None] = asyncio.Queue()
 
         async def on_token(text: str) -> None:
             await queue.put(("token", text))
@@ -205,8 +205,11 @@ async def _drive(ctx: TurnContext) -> AsyncIterator[dict[str, Any]]:
         async def on_reasoning(text: str) -> None:
             await queue.put(("reasoning", text))
 
+        async def on_tool_delta(index: int, snapshot: dict[str, str]) -> None:
+            await queue.put(("tool_call_delta", {"index": index, **snapshot}))
+
         task = asyncio.create_task(
-            llm.stream_completion(wire, schemas, on_token, on_reasoning)
+            llm.stream_completion(wire, schemas, on_token, on_reasoning, on_tool_delta)
         )
         task.add_done_callback(lambda _: queue.put_nowait(None))
 
@@ -220,6 +223,12 @@ async def _drive(ctx: TurnContext) -> AsyncIterator[dict[str, Any]]:
                 if item is None:
                     break
                 kind, chunk = item
+                if kind == "tool_call_delta":
+                    # The query as the model composes it. No DB write: this is
+                    # a preview of a call that has not been authorised yet, and
+                    # the authoritative row lands below once it is complete.
+                    yield _event(kind, **chunk)
+                    continue
                 if kind == "reasoning":
                     thinking.append(chunk)
                 else:

@@ -22,7 +22,8 @@ export interface Invocation {
     | "running"
     | "succeeded"
     | "failed"
-    | "timeout";
+    | "timeout"
+    | "cancelled";
   is_write: boolean;
   latency_ms: number | null;
   error: string | null;
@@ -84,6 +85,7 @@ export type StreamEvent =
   | { type: "message_start"; id: string; seq: number }
   | { type: "token"; text: string }
   | { type: "reasoning"; text: string }
+  | { type: "tool_call_delta"; index: number; name: string; arguments: string }
   | { type: "tool_call"; invocation: Invocation; awaiting_approval: boolean }
   | { type: "tool_result"; invocation: Invocation }
   | { type: "approval_required"; invocations: Invocation[] }

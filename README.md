@@ -353,7 +353,7 @@ TEST_DATABASE_URL='postgresql+asyncpg://test:test@localhost:55433/test' \
     .venv/bin/pytest tests -q                  # + integration tests
 ```
 
-91 tests covering the things that actually bite:
+93 tests covering the things that actually bite:
 
 - **Streaming, through the real ASGI app over HTTP** — all 500 chunks of a long
   answer arrive (not just the first), content containing raw newlines, blank
@@ -361,6 +361,11 @@ TEST_DATABASE_URL='postgresql+asyncpg://test:test@localhost:55433/test' \
   completion *after* a tool call streams in full too, and the stored transcript
   matches byte-for-byte what was streamed live.
 - **Tool fidelity** — a 200 KB MCP result reaches the model uncut.
+- **Every round of a multi-tool turn** — the model writes, calls a tool, reads
+  the result and writes again; all of it reaches the browser in arrival order,
+  not just the first round and the final answer. Reasoning deltas, where the
+  gateway exposes them, are streamed and stored but never replayed to the
+  model.
 - **Stopping a turn** — cancelling the response generator (what Starlette does
   on disconnect) cancels the completion and every in-flight MCP call, keeps the
   partial answer already on screen, and leaves no `tool_call` without a reply —

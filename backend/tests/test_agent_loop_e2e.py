@@ -42,7 +42,7 @@ def scripted_llm(script):
     through tool rounds deterministically."""
     calls = {"n": 0}
 
-    async def fake_stream(messages, tools, on_token):
+    async def fake_stream(messages, tools, on_token, on_reasoning=None):
         turn = script[min(calls["n"], len(script) - 1)]
         calls["n"] += 1
         for piece in turn.get("tokens", []):
@@ -192,7 +192,7 @@ async def test_every_tool_is_offered_but_writes_still_gate(db, monkeypatch):
     _use(monkeypatch, fake)
     offered: list[list[str]] = []
 
-    async def capture(messages, tools, on_token):
+    async def capture(messages, tools, on_token, on_reasoning=None):
         offered.append([t["function"]["name"] for t in tools])
         await on_token("done")
         result = llm.StreamedTurn()

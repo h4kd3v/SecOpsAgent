@@ -68,6 +68,8 @@ export interface Message {
   tool_calls: unknown[] | null;
   tool_call_id: string | null;
   status: string;
+  /** The model's working on the way to this answer, when the gateway streams it. */
+  reasoning: string | null;
   /** Why this turn failed, if it did. Persisted, so it survives a reload. */
   error: string | null;
   seq: number;
@@ -81,6 +83,7 @@ export type StreamEvent =
   | { type: "user_message"; id: string; seq: number }
   | { type: "message_start"; id: string; seq: number }
   | { type: "token"; text: string }
+  | { type: "reasoning"; text: string }
   | { type: "tool_call"; invocation: Invocation; awaiting_approval: boolean }
   | { type: "tool_result"; invocation: Invocation }
   | { type: "approval_required"; invocations: Invocation[] }

@@ -43,6 +43,9 @@ class MessageOut(BaseModel):
     tool_calls: list[dict[str, Any]] | None
     tool_call_id: str | None
     status: str
+    # The model's working, when the gateway streams it. Separate from content
+    # so the UI can present it as working rather than as the answer.
+    reasoning: str | None = None
     # Why this turn failed, if it did. Kept out of `content` so the UI can
     # style it as a failure rather than as something the model said.
     error: str | None = None

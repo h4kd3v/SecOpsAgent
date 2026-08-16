@@ -122,6 +122,10 @@ class Message(Base):
     # 'streaming' rows exist while tokens are still arriving, so a dropped
     # connection still leaves a partial transcript behind.
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="complete")
+    # The model's own analysis on the way to this answer, when the gateway
+    # streams it. Shown to the analyst, never replayed to the model: it is
+    # working, not something the assistant said.
+    reasoning: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Why a turn failed, kept beside the turn it failed on. A transient banner
     # is gone the moment the analyst switches conversations, which makes an
     # error the one part of the transcript they cannot go back and read.

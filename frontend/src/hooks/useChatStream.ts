@@ -2,13 +2,36 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, streamPost } from "../api";
 import type { Invocation, Message, StreamEvent } from "../types";
 
+/**
+ * One piece of a turn as it happens. A turn is not "some text plus some tool
+ * calls": the model writes, calls a tool, reads the result, writes again. Held
+ * as a flat blob, the second round's analysis rendered above the tool call
+ * that produced it — so the analyst read the conclusion before the evidence.
+ */
+export type LiveSegment =
+  | { kind: "text"; key: string; text: string }
+  | { kind: "reasoning"; key: string; text: string }
+  | { kind: "tool"; key: string; invocation: Invocation };
+
 export interface LiveState {
-  assistantText: string;
-  invocations: Invocation[];
+  segments: LiveSegment[];
   streaming: boolean;
 }
 
-const EMPTY_LIVE: LiveState = { assistantText: "", invocations: [], streaming: false };
+const EMPTY_LIVE: LiveState = { segments: [], streaming: false };
+
+/** Appends to the trailing segment of `kind`, or starts a new one. */
+function appendText(
+  segments: LiveSegment[],
+  kind: "text" | "reasoning",
+  text: string,
+): LiveSegment[] {
+  const last = segments[segments.length - 1];
+  if (last && last.kind === kind) {
+    return [...segments.slice(0, -1), { ...last, text: last.text + text }];
+  }
+  return [...segments, { kind, key: `${kind}-${segments.length}`, text }];
+}
 
 export function useChatStream(conversationId: string | null, onTitle: (t: string) => void) {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -50,16 +73,34 @@ export function useChatStream(conversationId: string | null, onTitle: (t: string
           setLive((l) => ({ ...l, streaming: true }));
           break;
         case "token":
-          setLive((l) => ({ ...l, assistantText: l.assistantText + event.text }));
+          setLive((l) => ({ ...l, segments: appendText(l.segments, "text", event.text) }));
+          break;
+        case "reasoning":
+          setLive((l) => ({
+            ...l,
+            segments: appendText(l.segments, "reasoning", event.text),
+          }));
           break;
         case "tool_call":
-          setLive((l) => ({ ...l, invocations: [...l.invocations, event.invocation] }));
+          setLive((l) => ({
+            ...l,
+            segments: [
+              ...l.segments,
+              {
+                kind: "tool",
+                key: `tool-${event.invocation.id}`,
+                invocation: event.invocation,
+              },
+            ],
+          }));
           break;
         case "tool_result":
           setLive((l) => ({
             ...l,
-            invocations: l.invocations.map((i) =>
-              i.id === event.invocation.id ? event.invocation : i,
+            segments: l.segments.map((s) =>
+              s.kind === "tool" && s.invocation.id === event.invocation.id
+                ? { ...s, invocation: event.invocation }
+                : s,
             ),
           }));
           break;
@@ -123,6 +164,7 @@ export function useChatStream(conversationId: string | null, onTitle: (t: string
         tool_calls: null,
         tool_call_id: null,
         status: "complete",
+        reasoning: null,
         error: null,
         seq: Number.MAX_SAFE_INTEGER,
         created_at: new Date().toISOString(),

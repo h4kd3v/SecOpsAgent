@@ -12,6 +12,7 @@ import {
   IconSparkle,
   IconStop,
 } from "./Icons";
+import { ReasoningBlock } from "./ReasoningBlock";
 import { PromptCards, PromptChips } from "./SuggestedPrompts";
 import { ToolCard } from "./ToolCard";
 import { UsageFooter } from "./UsageFooter";
@@ -41,7 +42,7 @@ export function ChatView(props: Props) {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages.length, live.assistantText, live.invocations.length, pending.length]);
+  }, [messages.length, liveLength(live.segments), live.segments.length, pending.length]);
 
   const submit = () => {
     const text = draft.trim();
@@ -106,16 +107,17 @@ export function ChatView(props: Props) {
                 {/* A turn that only carried tool calls has no prose. Rendering
                     the label and an empty card for it leaves a blank white
                     strip above the tool card that reads as a broken answer. */}
+                {(hasText(message) || message.reasoning) && (
+                  <div className="agent-label">
+                    <IconSparkle size={13} />
+                    SecOps Agent
+                  </div>
+                )}
+                {message.reasoning && <ReasoningBlock text={message.reasoning} />}
                 {hasText(message) && (
-                  <>
-                    <div className="agent-label">
-                      <IconSparkle size={13} />
-                      SecOps Agent
-                    </div>
-                    <div className="agent-body">
-                      <Markdown remarkPlugins={[remarkGfm]}>{message.content ?? ""}</Markdown>
-                    </div>
-                  </>
+                  <div className="agent-body">
+                    <Markdown remarkPlugins={[remarkGfm]}>{message.content ?? ""}</Markdown>
+                  </div>
                 )}
                 {invocations
                   .filter((i) => i.tool_call_id && messageOwnsCall(message, i))
@@ -179,13 +181,25 @@ export function ChatView(props: Props) {
               <IconSparkle size={13} />
               SecOps Agent
             </div>
-            <div className="agent-body">
-              <Markdown remarkPlugins={[remarkGfm]}>{live.assistantText}</Markdown>
-              {!live.assistantText && <span className="cursor" />}
-            </div>
-            {live.invocations.map((i) => (
-              <ToolCard key={i.id} invocation={i} />
-            ))}
+            {/* Rendered in arrival order. The model writes, calls a tool, reads
+                the result and writes again; flattening that into one bubble
+                put later analysis above the tool call it came from. */}
+            {live.segments.map((segment) =>
+              segment.kind === "tool" ? (
+                <ToolCard key={segment.key} invocation={segment.invocation} />
+              ) : segment.kind === "reasoning" ? (
+                <ReasoningBlock key={segment.key} text={segment.text} live />
+              ) : (
+                <div className="agent-body" key={segment.key}>
+                  <Markdown remarkPlugins={[remarkGfm]}>{segment.text}</Markdown>
+                </div>
+              ),
+            )}
+            {live.segments.length === 0 && (
+              <div className="agent-body">
+                <span className="cursor" />
+              </div>
+            )}
           </div>
         )}
 
@@ -241,6 +255,11 @@ export function ChatView(props: Props) {
       </div>
     </div>
   );
+}
+
+/** Total characters streamed so far — the scroll trigger while a turn runs. */
+function liveLength(segments: LiveState["segments"]): number {
+  return segments.reduce((n, s) => n + (s.kind === "tool" ? 0 : s.text.length), 0);
 }
 
 function hasText(message: Message): boolean {

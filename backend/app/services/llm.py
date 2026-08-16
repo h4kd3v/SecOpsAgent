@@ -105,6 +105,10 @@ class StreamedTurn:
     """What one assistant turn produced once the stream is exhausted."""
 
     content: str = ""
+    # Analysis the model emitted on its way to the answer. Gateways expose it
+    # as `reasoning_content` (LiteLLM, DeepSeek) or `reasoning`; it is not part
+    # of the answer and is never sent back as assistant content.
+    reasoning: str = ""
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     usage: dict[str, Any] | None = None
     finish_reason: str | None = None
@@ -149,8 +153,14 @@ async def stream_completion(
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]] | None,
     on_token: Any,
+    on_reasoning: Any = None,
 ) -> StreamedTurn:
-    """Run one completion, invoking `on_token(text)` per text delta."""
+    """Run one completion, invoking `on_token(text)` per text delta.
+
+    `on_reasoning` receives the model's analysis deltas as they arrive, so the
+    analyst watches the working rather than a spinner. Optional because not
+    every gateway or model emits any.
+    """
     kwargs: dict[str, Any] = {
         "model": settings.llm_model_name,
         "messages": messages,
@@ -185,6 +195,12 @@ async def stream_completion(
         if delta.content:
             turn.content += delta.content
             await on_token(delta.content)
+        # Not a typed field on the OpenAI SDK's delta: gateways add it, so it
+        # arrives via pydantic's extras. Two spellings are in the wild.
+        thought = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
+        if thought and on_reasoning is not None:
+            turn.reasoning += thought
+            await on_reasoning(thought)
         if delta.tool_calls:
             accumulator.add(delta.tool_calls)
 

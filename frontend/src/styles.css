@@ -477,6 +477,46 @@ body {
 }
 @keyframes blink { 50% { opacity: 0.15; } }
 
+.reasoning {
+  margin: 0 0 0.55rem;
+  border: 1px dashed #d5daea;
+  border-radius: var(--radius);
+  background: var(--line-soft);
+  overflow: hidden;
+}
+.reasoning.live { border-style: solid; border-color: var(--accent-soft); }
+.reasoning-head {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  width: 100%;
+  padding: 0.5rem 0.8rem;
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 0.79rem;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+}
+.reasoning.live .reasoning-head { color: var(--accent); }
+.reasoning-toggle { margin-left: auto; font-weight: 400; opacity: 0.75; }
+.reasoning-body {
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 0 0.85rem 0.7rem;
+  color: var(--text-dim);
+  font-size: 0.82rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Consecutive text segments of one turn are one answer split by tool calls,
+   so they read as separate cards rather than a single run-on block. */
+.turn.assistant .agent-body + .agent-body { margin-top: 0.55rem; }
+
 .stopped-note {
   display: inline-flex;
   align-items: center;

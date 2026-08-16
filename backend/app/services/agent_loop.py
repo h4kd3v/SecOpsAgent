@@ -194,24 +194,39 @@ async def _drive(ctx: TurnContext) -> AsyncIterator[dict[str, Any]]:
 
         # Tokens are pushed onto a queue by the LLM callback so this generator
         # can forward them while the completion is still running.
-        queue: asyncio.Queue[str | None] = asyncio.Queue()
+        # Text and analysis share one queue so they reach the browser in the
+        # order the gateway produced them. Two queues would let the UI show
+        # the conclusion above the working that led to it.
+        queue: asyncio.Queue[tuple[str, str] | None] = asyncio.Queue()
 
         async def on_token(text: str) -> None:
-            await queue.put(text)
+            await queue.put(("token", text))
 
-        task = asyncio.create_task(llm.stream_completion(wire, schemas, on_token))
+        async def on_reasoning(text: str) -> None:
+            await queue.put(("reasoning", text))
+
+        task = asyncio.create_task(
+            llm.stream_completion(wire, schemas, on_token, on_reasoning)
+        )
         task.add_done_callback(lambda _: queue.put_nowait(None))
 
         streamed: list[str] = []
+        thinking: list[str] = []
         last_flush = time.monotonic()
 
         try:
             while True:
-                chunk = await queue.get()
-                if chunk is None:
+                item = await queue.get()
+                if item is None:
                     break
-                streamed.append(chunk)
-                yield _event("token", text=chunk)
+                kind, chunk = item
+                if kind == "reasoning":
+                    thinking.append(chunk)
+                else:
+                    streamed.append(chunk)
+                # Forwarded one delta at a time, unbuffered, so the analyst
+                # sees the turn unfold instead of waiting for the round to end.
+                yield _event(kind, text=chunk)
 
                 # Checkpoint the partial answer. Content is otherwise written
                 # only once the completion returns, so pressing Stop halfway
@@ -223,8 +238,8 @@ async def _drive(ctx: TurnContext) -> AsyncIterator[dict[str, Any]]:
                 # The first token is written immediately: an analyst who stops
                 # a turn within the first second should still find what they
                 # saw, and one checkpoint per turn is not worth optimising away.
-                if len(streamed) == 1 or now - last_flush >= PARTIAL_FLUSH_SECONDS:
-                    await _checkpoint(assistant.id, "".join(streamed))
+                if len(streamed) + len(thinking) == 1 or now - last_flush >= PARTIAL_FLUSH_SECONDS:
+                    await _checkpoint(assistant.id, "".join(streamed), "".join(thinking))
                     last_flush = now
             turn = await task
         except Exception as exc:  # noqa: BLE001
@@ -243,6 +258,7 @@ async def _drive(ctx: TurnContext) -> AsyncIterator[dict[str, Any]]:
             # that did arrive before the failure is kept beside it.
             assistant.error = explanation
             assistant.content = "".join(streamed) or None
+            assistant.reasoning = "".join(thinking) or None
             # The raw exception goes to the audit trail rather than the
             # transcript: it is what an operator needs to debug a gateway, and
             # what an analyst should never have to read.
@@ -271,12 +287,12 @@ async def _drive(ctx: TurnContext) -> AsyncIterator[dict[str, Any]]:
             # Catches the last sub-second of tokens on a clean close. Under a
             # hard cancellation this await is cancelled too, which is why the
             # periodic checkpoint above exists rather than relying on this.
-            partial = "".join(streamed)
-            if partial:
+            if streamed or thinking:
                 with contextlib.suppress(BaseException):
-                    await _checkpoint(assistant.id, partial)
+                    await _checkpoint(assistant.id, "".join(streamed), "".join(thinking))
 
         assistant.content = turn.content or None
+        assistant.reasoning = turn.reasoning or None
         assistant.tool_calls = turn.tool_calls or None
         assistant.status = "complete"
         # Record what the gateway actually served, not the alias we asked for.
@@ -496,7 +512,7 @@ def _parse_args(raw: str) -> tuple[dict[str, Any], str | None]:
     return parsed, None
 
 
-async def _checkpoint(message_id: uuid.UUID, text: str) -> None:
+async def _checkpoint(message_id: uuid.UUID, text: str, reasoning: str = "") -> None:
     """Persist a partially streamed answer, immune to the Stop that follows it.
 
     On its own session and shielded, for one reason: the analyst pressing Stop
@@ -510,7 +526,9 @@ async def _checkpoint(message_id: uuid.UUID, text: str) -> None:
     async def write() -> None:
         async with SessionMaker() as db:
             await db.execute(
-                update(Message).where(Message.id == message_id).values(content=text)
+                update(Message)
+                .where(Message.id == message_id)
+                .values(content=text, reasoning=reasoning or None)
             )
             await db.commit()
 

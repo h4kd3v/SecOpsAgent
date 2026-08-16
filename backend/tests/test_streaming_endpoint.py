@@ -26,6 +26,7 @@ from app.db.models import AnonSession, Base, Conversation  # noqa: E402
 from app.db.session import SessionMaker, engine  # noqa: E402
 from app.main import app  # noqa: E402
 from app.services import agent_loop, llm  # noqa: E402
+from app.services import repository as repo  # noqa: E402
 from app.services.mcp_manager import ToolResult, ToolSpec  # noqa: E402
 
 def _use(monkeypatch, fake):
@@ -41,6 +42,10 @@ def _use(monkeypatch, fake):
     monkeypatch.setattr(loop_module, "mcp_manager", fake)
     monkeypatch.setattr(catalog_module, "mcp_manager", fake)
     return fake
+
+
+def call(cid: str, name: str, args: str = "{}"):
+    return {"id": cid, "type": "function", "function": {"name": name, "arguments": args}}
 
 
 READ_TOOL = ToolSpec("search_udm", "search events", {"type": "object"}, read_only=True)
@@ -99,7 +104,7 @@ def scripted(chunks: list[str], tool_calls: list | None = None):
     """One completion that emits `chunks` verbatim, then optionally tool calls."""
     state = {"n": 0}
 
-    async def fake_stream(messages, tools, on_token):
+    async def fake_stream(messages, tools, on_token, on_reasoning=None):
         state["n"] += 1
         result = llm.StreamedTurn()
         if state["n"] == 1 and tool_calls:
@@ -211,7 +216,7 @@ async def test_full_tool_output_reaches_the_model(wired, monkeypatch):
 
     seen: list[str] = []
 
-    async def capture(messages, tools, on_token):
+    async def capture(messages, tools, on_token, on_reasoning=None):
         result = llm.StreamedTurn()
         if not seen:
             seen.append("first")
@@ -243,7 +248,7 @@ async def test_hitting_the_output_token_limit_is_reported_as_such(wired, monkeyp
     client, conversation_id = wired
     _use(monkeypatch, FakeMcp())
 
-    async def truncated(messages, tools, on_token):
+    async def truncated(messages, tools, on_token, on_reasoning=None):
         await on_token("This answer stops mid-")
         result = llm.StreamedTurn()
         result.content = "This answer stops mid-"
@@ -283,7 +288,7 @@ async def test_usage_and_model_are_recorded_and_returned(wired, monkeypatch):
     client, conversation_id = wired
     _use(monkeypatch, FakeMcp())
 
-    async def with_usage(messages, tools, on_token):
+    async def with_usage(messages, tools, on_token, on_reasoning=None):
         await on_token("answer")
         result = llm.StreamedTurn()
         result.content = "answer"
@@ -316,7 +321,7 @@ async def test_usage_is_estimated_when_the_gateway_omits_it(wired, monkeypatch):
     client, conversation_id = wired
     _use(monkeypatch, FakeMcp())
 
-    async def no_usage(messages, tools, on_token):
+    async def no_usage(messages, tools, on_token, on_reasoning=None):
         await on_token("hello there")
         result = llm.StreamedTurn()
         result.content = "hello there"
@@ -374,3 +379,81 @@ async def test_one_visitor_cannot_open_another_visitors_conversation(wired):
 
     response = await client.get(f"/api/conversations/{_uuid.uuid4()}")
     assert response.status_code == 404
+
+
+async def test_every_round_of_a_multi_tool_turn_reaches_the_client(wired, monkeypatch):
+    """The model writes, calls a tool, writes again, calls another, then
+    answers. Every one of those deltas has to arrive — not just the first
+    round's, and not just the final answer."""
+    client, conversation_id = wired
+    fake = FakeMcp()
+    _use(monkeypatch, fake)
+
+    rounds = [
+        {
+            "tokens": ["Checking ", "the alert ", "table. "],
+            "tool_calls": [call("c1", "search_udm", '{"q": "alerts"}')],
+        },
+        {
+            "tokens": ["Twelve rows. ", "Now the assets. "],
+            "tool_calls": [call("c2", "search_udm", '{"q": "assets"}')],
+        },
+        {"tokens": ["WIN-FIN-04 ", "is the common host."]},
+    ]
+    state = {"n": 0}
+
+    async def multi_round(messages, tools, on_token, on_reasoning=None):
+        script = rounds[min(state["n"], len(rounds) - 1)]
+        state["n"] += 1
+        for chunk in script["tokens"]:
+            await on_token(chunk)
+        result = llm.StreamedTurn()
+        result.content = "".join(script["tokens"])
+        result.tool_calls = script.get("tool_calls", [])
+        return result
+
+    monkeypatch.setattr(llm, "stream_completion", multi_round)
+    events = await collect(client, conversation_id, "which host is common?")
+
+    streamed = "".join(e["text"] for e in events if e.get("type") == "token")
+    expected = "".join(chunk for r in rounds for chunk in r["tokens"])
+    assert streamed == expected, "text from a later round went missing"
+
+    # And the tools ran in between, not all bunched at one end.
+    order = [e.get("type") for e in events if e.get("type") in ("token", "tool_result")]
+    assert order.count("tool_result") == 2
+    assert order.index("tool_result") > 0, "a tool result arrived before any text"
+    assert order[-1] == "token", "the final answer must come after the last tool"
+
+
+async def test_reasoning_deltas_are_streamed_and_stored(wired, monkeypatch):
+    """A gateway that exposes a reasoning channel should have it on screen as
+    it arrives, not summarised after the fact."""
+    client, conversation_id = wired
+    _use(monkeypatch, FakeMcp())
+
+    async def thinks_aloud(messages, tools, on_token, on_reasoning=None):
+        await on_reasoning("The alert count looks high. ")
+        await on_token("Twelve alerts. ")
+        await on_reasoning("Worth checking the host.")
+        await on_token("All on WIN-FIN-04.")
+        result = llm.StreamedTurn()
+        result.content = "Twelve alerts. All on WIN-FIN-04."
+        result.reasoning = "The alert count looks high. Worth checking the host."
+        return result
+
+    monkeypatch.setattr(llm, "stream_completion", thinks_aloud)
+    events = await collect(client, conversation_id, "how many alerts?")
+
+    kinds = [e.get("type") for e in events if e.get("type") in ("token", "reasoning")]
+    # Interleaved exactly as the gateway produced them.
+    assert kinds == ["reasoning", "token", "reasoning", "token"]
+
+    async with SessionMaker() as db:
+        history = await repo.load_history(db, conversation_id)
+    answer = [m for m in history if m.role == "assistant"][-1]
+    assert answer.reasoning == "The alert count looks high. Worth checking the host."
+
+    # Working, not something the assistant said: it must not go back up.
+    wire = repo.to_wire(history)
+    assert not any("alert count looks high" in str(m) for m in wire)

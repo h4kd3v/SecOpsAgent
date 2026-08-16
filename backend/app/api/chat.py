@@ -79,21 +79,40 @@ async def _stream(
         except Exception as exc:  # noqa: BLE001 - never leak a traceback to the UI
             logger.exception("agent loop crashed")
             interrupted = True
-            yield _sse({"type": "error", "message": f"Internal error: {exc}"})
+            detail = f"Internal error: {exc}"
+            # Its own session: `db` may be mid-rollback after the crash, and an
+            # error the analyst can still read tomorrow is the whole point.
+            try:
+                async with SessionMaker() as fresh:
+                    await repo.record_error(fresh, conversation_id, detail)
+            except Exception:  # noqa: BLE001
+                logger.warning("could not record the crash on the transcript", exc_info=True)
+            yield _sse({"type": "error", "message": detail})
         finally:
             if not detached and interrupted:
                 # Closing the loop cancels the in-flight completion and every
                 # outstanding MCP call; settling records what that left behind.
                 with contextlib.suppress(Exception):
                     await generator.aclose()
-                try:
-                    await repo.settle_interrupted_turn(db, conversation_id)
-                except Exception:  # noqa: BLE001
-                    logger.warning("failed to settle an interrupted turn", exc_info=True)
+                await _settle(conversation_id)
 
         # Deliberately outside the `finally`: yielding while a GeneratorExit is
         # in flight raises "async generator ignored GeneratorExit".
         yield "event: stream_end\ndata: {}\n\n"
+
+
+async def _settle(conversation_id: uuid.UUID) -> None:
+    """Repair an interrupted turn, always on a session of its own.
+
+    Never the turn's session: a cancellation lands mid-flush often enough that
+    it is left needing a rollback, and the repair is precisely the work that
+    must not be lost to that.
+    """
+    try:
+        async with SessionMaker() as db:
+            await repo.settle_interrupted_turn(db, conversation_id)
+    except Exception:  # noqa: BLE001
+        logger.warning("failed to settle an interrupted turn", exc_info=True)
 
 
 def _finish_detached(generator: AsyncIterator[dict[str, Any]], conversation_id: uuid.UUID) -> None:
@@ -102,11 +121,7 @@ def _finish_detached(generator: AsyncIterator[dict[str, Any]], conversation_id: 
     async def finish() -> None:
         with contextlib.suppress(Exception):
             await generator.aclose()
-        try:
-            async with SessionMaker() as db:
-                await repo.settle_interrupted_turn(db, conversation_id)
-        except Exception:  # noqa: BLE001
-            logger.warning("failed to settle a cancelled turn", exc_info=True)
+        await _settle(conversation_id)
 
     task = asyncio.create_task(finish())
     # asyncio keeps only a weak reference to running tasks, so a bare

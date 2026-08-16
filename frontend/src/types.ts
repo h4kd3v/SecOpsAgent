@@ -68,6 +68,8 @@ export interface Message {
   tool_calls: unknown[] | null;
   tool_call_id: string | null;
   status: string;
+  /** Why this turn failed, if it did. Persisted, so it survives a reload. */
+  error: string | null;
   seq: number;
   created_at: string;
   token_usage: TokenUsage | null;

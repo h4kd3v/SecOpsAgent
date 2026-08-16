@@ -22,10 +22,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.db.models import AnonSession, Conversation, ToolInvocation
+from app.db.models import AnonSession, Conversation, Message, ToolInvocation
+from app.db.session import SessionMaker
 from app.services import llm, repository as repo
 from app.services.mcp_manager import McpUnavailable, ToolSpec, mcp_manager
 from app.services.tool_catalog import tool_catalog
@@ -145,6 +147,13 @@ async def _drive(ctx: TurnContext) -> AsyncIterator[dict[str, Any]]:
         logger.error("MCP unavailable, continuing without tools: %s", exc)
         specs = []
         degraded = True
+        await repo.audit(
+            ctx.db,
+            "mcp.unavailable",
+            session_id=ctx.session.id,
+            detail={"conversation_id": str(ctx.conversation.id), "error": str(exc)[:2000]},
+        )
+        await ctx.db.commit()
         yield _event(
             "warning",
             message=(
@@ -211,36 +220,61 @@ async def _drive(ctx: TurnContext) -> AsyncIterator[dict[str, Any]]:
                 # reasonably expect to still have it. Time-based, so it costs
                 # about one UPDATE per second per active turn.
                 now = time.monotonic()
-                if now - last_flush >= PARTIAL_FLUSH_SECONDS:
-                    assistant.content = "".join(streamed)
-                    await ctx.db.commit()
+                # The first token is written immediately: an analyst who stops
+                # a turn within the first second should still find what they
+                # saw, and one checkpoint per turn is not worth optimising away.
+                if len(streamed) == 1 or now - last_flush >= PARTIAL_FLUSH_SECONDS:
+                    await _checkpoint(assistant.id, "".join(streamed))
                     last_flush = now
             turn = await task
         except Exception as exc:  # noqa: BLE001
             logger.exception("completion failed")
             explanation = llm.describe_error(exc)
+            # The failure may have interrupted a checkpoint commit, which
+            # leaves the session refusing every subsequent statement until it
+            # is rolled back. Recording *why* the turn failed is the one thing
+            # that must not be lost to how it failed.
+            with contextlib.suppress(Exception):
+                await ctx.db.rollback()
             assistant.status = "error"
-            # Short marker only. The full explanation rides on the error event;
-            # writing it into content too meant the analyst read the same wall
-            # of provider JSON twice.
-            assistant.content = None
+            # Stored, not just streamed. The event below is gone the moment the
+            # analyst switches conversations; this is what they see when they
+            # come back to work out why the turn produced nothing. Any text
+            # that did arrive before the failure is kept beside it.
+            assistant.error = explanation
+            assistant.content = "".join(streamed) or None
+            # The raw exception goes to the audit trail rather than the
+            # transcript: it is what an operator needs to debug a gateway, and
+            # what an analyst should never have to read.
+            await repo.audit(
+                ctx.db,
+                "completion.failed",
+                session_id=ctx.session.id,
+                detail={
+                    "conversation_id": str(ctx.conversation.id),
+                    "message_id": str(assistant.id),
+                    "model": settings.llm_model_name,
+                    "exception": type(exc).__name__,
+                    "raw": str(exc)[:4000],
+                },
+            )
             await ctx.db.commit()
-            yield _event("error", message=explanation)
+            async for event in _maybe_title(ctx, "", allow_model=False):
+                yield event
+            yield _event("error", message=explanation, id=str(assistant.id))
             return
         finally:
             # Also runs on GeneratorExit when the browser disconnects — without
             # this the completion keeps streaming into a queue nobody reads.
             if not task.done():
                 task.cancel()
-            # Best effort: on a clean close this saves the last sub-second of
-            # tokens. A hard task cancellation cancels the await itself, which
-            # is why the periodic checkpoint above exists rather than relying
-            # on this.
+            # Catches the last sub-second of tokens on a clean close. Under a
+            # hard cancellation this await is cancelled too, which is why the
+            # periodic checkpoint above exists rather than relying on this.
             partial = "".join(streamed)
-            if partial and assistant.content != partial:
+            if partial:
                 with contextlib.suppress(BaseException):
-                    assistant.content = partial
-                    await ctx.db.commit()
+                    await _checkpoint(assistant.id, partial)
 
         assistant.content = turn.content or None
         assistant.tool_calls = turn.tool_calls or None
@@ -334,13 +368,16 @@ async def _drive(ctx: TurnContext) -> AsyncIterator[dict[str, Any]]:
             )
             return  # the turn resumes via POST /approvals
 
-    yield _event(
-        "error",
-        message=(
-            f"Stopped after {settings.llm_max_tool_iterations} tool rounds without a final "
-            "answer. Try narrowing the question."
-        ),
+    exhausted = (
+        f"Stopped after {settings.llm_max_tool_iterations} tool rounds without a final "
+        "answer. Try narrowing the question."
     )
+    # Recorded, not just announced: an analyst reopening this thread would
+    # otherwise find their question, a pile of tool calls, and no explanation.
+    await repo.record_error(ctx.db, ctx.conversation.id, exhausted, model=settings.llm_model_name)
+    async for event in _maybe_title(ctx, "", allow_model=False):
+        yield event
+    yield _event("error", message=exhausted)
 
 
 async def _execute_batch(
@@ -459,14 +496,48 @@ def _parse_args(raw: str) -> tuple[dict[str, Any], str | None]:
     return parsed, None
 
 
-async def _maybe_title(ctx: TurnContext, reply: str) -> AsyncIterator[dict[str, Any]]:
+async def _checkpoint(message_id: uuid.UUID, text: str) -> None:
+    """Persist a partially streamed answer, immune to the Stop that follows it.
+
+    On its own session and shielded, for one reason: the analyst pressing Stop
+    cancels this coroutine, and an unshielded commit sharing the turn's session
+    would be rolled back — losing exactly the text this exists to save, and
+    leaving the session unusable for recording why the turn ended.
+
+    The cost is one short transaction per second per in-flight turn.
+    """
+
+    async def write() -> None:
+        async with SessionMaker() as db:
+            await db.execute(
+                update(Message).where(Message.id == message_id).values(content=text)
+            )
+            await db.commit()
+
+    await asyncio.shield(asyncio.ensure_future(write()))
+
+
+async def _maybe_title(
+    ctx: TurnContext, reply: str, *, allow_model: bool = True
+) -> AsyncIterator[dict[str, Any]]:
     if ctx.conversation.title != "New conversation":
         return
     history = await repo.load_history(ctx.db, ctx.conversation.id)
     first_user = next((m.content for m in history if m.role == "user" and m.content), "")
     if not first_user:
         return
-    title = await llm.generate_title(first_user, reply or "")
+
+    # A thread stuck at "New conversation" is one an analyst cannot find again,
+    # which matters most for the turns that went wrong — those are the ones
+    # they come back to. So a failed turn still gets a title, taken from the
+    # prompt rather than from a model that has just proved unavailable.
+    title = ""
+    if allow_model:
+        try:
+            title = await llm.generate_title(first_user, reply or "")
+        except Exception:  # noqa: BLE001
+            logger.warning("title generation failed; using the prompt", exc_info=True)
+    title = title or repo.title_from_prompt(first_user)
     ctx.conversation.title = title
     # Push the new title to the sidebar in every tab this visitor has open.
     await repo.notify_conversation(ctx.db, ctx.conversation, "conversation_updated")

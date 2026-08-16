@@ -22,12 +22,13 @@ export function useChatStream(conversationId: string | null, onTitle: (t: string
   const abortRef = useRef<AbortController | null>(null);
 
   const refresh = useCallback(async () => {
-    if (!conversationId) return;
+    if (!conversationId) return null;
     const detail = await api.getConversation(conversationId);
     setMessages(detail.messages);
     setInvocations(detail.invocations);
     setTotalTokens(detail.total_tokens);
     setPending(detail.invocations.filter((i) => i.status === "pending_approval"));
+    return detail;
   }, [conversationId]);
 
   useEffect(() => {
@@ -103,7 +104,10 @@ export function useChatStream(conversationId: string | null, onTitle: (t: string
         setBusy(false);
         // The server persisted everything as it went, so the canonical
         // transcript is one GET away — cheaper than reconciling by hand.
-        await refresh();
+        const detail = await refresh();
+        // The failure is now part of the transcript, so keeping the floating
+        // banner too would show the analyst the same sentence twice.
+        if (detail?.messages.some((m) => m.error)) setError(null);
         setLive(EMPTY_LIVE);
       }
     },
@@ -119,6 +123,7 @@ export function useChatStream(conversationId: string | null, onTitle: (t: string
         tool_calls: null,
         tool_call_id: null,
         status: "complete",
+        error: null,
         seq: Number.MAX_SAFE_INTEGER,
         created_at: new Date().toISOString(),
         token_usage: null,

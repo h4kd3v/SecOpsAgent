@@ -285,6 +285,11 @@ async def test_closing_the_stream_repairs_the_transcript(db, monkeypatch):
     )
     frames = await _pump(stream, until=stalled)
     assert any("token" in f for f in frames), "nothing streamed before the abort"
+
+    # Starlette closes the response generator once the client is gone. Without
+    # it a generator parked at an unconsumed `yield` never runs its cleanup.
+    with contextlib.suppress(BaseException):
+        await stream.aclose()
     await _drain_cleanup()
 
     async with SessionMaker() as fresh:
@@ -335,6 +340,8 @@ async def test_cancelling_settles_an_unanswered_tool_call(db, monkeypatch):
         _NeverDisconnects(), conversation.session_id, conversation.id, "message", "search"
     )
     await _pump(stream, until=hung)
+    with contextlib.suppress(BaseException):
+        await stream.aclose()
     await _drain_cleanup()
 
     async with SessionMaker() as fresh:

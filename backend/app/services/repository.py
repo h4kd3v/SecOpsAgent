@@ -81,7 +81,17 @@ def to_wire(messages: list[Message]) -> list[dict[str, Any]]:
             )
         else:
             wire.append({"role": m.role, "content": m.content or ""})
-    return wire
+
+    # A `tool` reply whose assistant turn was dropped above is just as fatal as
+    # a tool_call with no reply — the API rejects both. Dropping the strays is
+    # the only safe option once their turn is gone.
+    asked = {
+        call.get("id")
+        for entry in wire
+        for call in (entry.get("tool_calls") or [])
+        if isinstance(call, dict)
+    }
+    return [m for m in wire if m["role"] != "tool" or m.get("tool_call_id") in asked]
 
 
 async def touch_conversation(
@@ -163,6 +173,31 @@ async def delete_empty_conversations(db: AsyncSession, older_than_hours: float) 
     return removed
 
 
+def title_from_prompt(text: str, limit: int = 60) -> str:
+    """A title with no model behind it, for when the model is what failed."""
+    first_line = " ".join(text.strip().split())
+    if len(first_line) <= limit:
+        return first_line or "New conversation"
+    return first_line[:limit].rsplit(" ", 1)[0] + "…"
+
+
+async def record_error(
+    db: AsyncSession, conversation_id: uuid.UUID, text: str, *, model: str | None = None
+) -> Message:
+    """Append a failure to the transcript as a turn in its own right.
+
+    For failures with no assistant row to hang off — the loop giving up, or a
+    crash in the endpoint itself. Without this the analyst sees their prompt,
+    no answer, and no reason.
+    """
+    message = await add_message(
+        db, conversation_id, "assistant", content=None, status="error", model=model
+    )
+    message.error = text
+    await db.commit()
+    return message
+
+
 CANCEL_NOTE = (
     "Tool call cancelled: the analyst stopped this turn before the tool returned. "
     "No result is available."
@@ -229,7 +264,21 @@ async def settle_interrupted_turn(db: AsyncSession, conversation_id: uuid.UUID) 
             replied.add(call_id)
             changed = True
 
-    if changed:
+    # A stopped turn never reaches the titling step, so without this every
+    # thread an analyst interrupts stays "New conversation" — indistinguishable
+    # from every other one in the sidebar. Deliberately not counted as a
+    # repair: the return value answers "was this turn damaged?", and a missing
+    # title is not damage.
+    titled = False
+    conversation = await db.get(Conversation, conversation_id)
+    if conversation is not None and conversation.title == "New conversation":
+        first_user = next((m.content for m in history if m.role == "user" and m.content), "")
+        if first_user:
+            conversation.title = title_from_prompt(first_user)
+            await notify_conversation(db, conversation, "conversation_updated")
+            titled = True
+
+    if changed or titled:
         await db.commit()
     return changed
 

@@ -3,7 +3,15 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Invocation, Message } from "../types";
 import { ApprovalPanel } from "./ApprovalPanel";
-import { IconCheck, IconCopy, IconRetry, IconSend, IconSparkle, IconStop } from "./Icons";
+import {
+  IconAlert,
+  IconCheck,
+  IconCopy,
+  IconRetry,
+  IconSend,
+  IconSparkle,
+  IconStop,
+} from "./Icons";
 import { PromptCards, PromptChips } from "./SuggestedPrompts";
 import { ToolCard } from "./ToolCard";
 import { UsageFooter } from "./UsageFooter";
@@ -120,6 +128,14 @@ export function ChatView(props: Props) {
                     {hasText(message)
                       ? "You stopped this answer — it is incomplete."
                       : "You stopped this turn before the model replied."}
+                  </div>
+                )}
+                {/* Read from the message, not from the live stream, so it is
+                    still here when the conversation is reopened tomorrow. */}
+                {message.error && (
+                  <div className="turn-error">
+                    <IconAlert size={15} />
+                    <span>{message.error}</span>
                   </div>
                 )}
                 {hasText(message) && (

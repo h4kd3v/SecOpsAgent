@@ -43,6 +43,9 @@ class MessageOut(BaseModel):
     tool_calls: list[dict[str, Any]] | None
     tool_call_id: str | None
     status: str
+    # Why this turn failed, if it did. Kept out of `content` so the UI can
+    # style it as a failure rather than as something the model said.
+    error: str | None = None
     seq: int
     created_at: datetime
     # {prompt_tokens, completion_tokens, total_tokens, estimated?}

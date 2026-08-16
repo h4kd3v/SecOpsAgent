@@ -122,6 +122,10 @@ class Message(Base):
     # 'streaming' rows exist while tokens are still arriving, so a dropped
     # connection still leaves a partial transcript behind.
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="complete")
+    # Why a turn failed, kept beside the turn it failed on. A transient banner
+    # is gone the moment the analyst switches conversations, which makes an
+    # error the one part of the transcript they cannot go back and read.
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
     token_usage: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     model: Mapped[str | None] = mapped_column(String(120), nullable=True)
     seq: Mapped[int] = mapped_column(Integer, nullable=False)

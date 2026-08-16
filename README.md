@@ -353,7 +353,7 @@ TEST_DATABASE_URL='postgresql+asyncpg://test:test@localhost:55433/test' \
     .venv/bin/pytest tests -q                  # + integration tests
 ```
 
-84 tests covering the things that actually bite:
+91 tests covering the things that actually bite:
 
 - **Streaming, through the real ASGI app over HTTP** — all 500 chunks of a long
   answer arrive (not just the first), content containing raw newlines, blank
@@ -365,6 +365,11 @@ TEST_DATABASE_URL='postgresql+asyncpg://test:test@localhost:55433/test' \
   on disconnect) cancels the completion and every in-flight MCP call, keeps the
   partial answer already on screen, and leaves no `tool_call` without a reply —
   an orphan there makes every *later* turn in that conversation fail.
+- **Nothing goes unrecorded** — a one-word prompt is stored before the model is
+  called; a failed turn keeps its reason, its partial text and its place in the
+  sidebar; the raw provider payload lands in `audit_events` while the analyst
+  sees a sentence. Failures are shown to the analyst but never replayed to the
+  model.
 - Streamed tool-call reassembly from fragmented deltas.
 - Writes parking for approval; denials recorded without execution; hallucinated
   tool names returning an error to the model instead of crashing the turn.

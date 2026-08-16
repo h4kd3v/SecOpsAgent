@@ -12,8 +12,10 @@ awaiting approval therefore *park* the turn rather than skipping ahead.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
+import time
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -34,6 +36,10 @@ settings = get_settings()
 
 MAX_PARALLEL_TOOLS = 4
 RESULT_PREVIEW_CHARS = 400
+# How often a partially streamed answer is checkpointed to the database,
+# so pressing Stop keeps the text already on screen. One UPDATE per second
+# per in-flight turn is noise next to the completion it accompanies.
+PARTIAL_FLUSH_SECONDS = 1.0
 
 
 @dataclass
@@ -187,12 +193,28 @@ async def _drive(ctx: TurnContext) -> AsyncIterator[dict[str, Any]]:
         task = asyncio.create_task(llm.stream_completion(wire, schemas, on_token))
         task.add_done_callback(lambda _: queue.put_nowait(None))
 
+        streamed: list[str] = []
+        last_flush = time.monotonic()
+
         try:
             while True:
                 chunk = await queue.get()
                 if chunk is None:
                     break
+                streamed.append(chunk)
                 yield _event("token", text=chunk)
+
+                # Checkpoint the partial answer. Content is otherwise written
+                # only once the completion returns, so pressing Stop halfway
+                # through a long answer would leave an empty bubble in the
+                # transcript — the analyst watched that text arrive and would
+                # reasonably expect to still have it. Time-based, so it costs
+                # about one UPDATE per second per active turn.
+                now = time.monotonic()
+                if now - last_flush >= PARTIAL_FLUSH_SECONDS:
+                    assistant.content = "".join(streamed)
+                    await ctx.db.commit()
+                    last_flush = now
             turn = await task
         except Exception as exc:  # noqa: BLE001
             logger.exception("completion failed")
@@ -210,6 +232,15 @@ async def _drive(ctx: TurnContext) -> AsyncIterator[dict[str, Any]]:
             # this the completion keeps streaming into a queue nobody reads.
             if not task.done():
                 task.cancel()
+            # Best effort: on a clean close this saves the last sub-second of
+            # tokens. A hard task cancellation cancels the await itself, which
+            # is why the periodic checkpoint above exists rather than relying
+            # on this.
+            partial = "".join(streamed)
+            if partial and assistant.content != partial:
+                with contextlib.suppress(BaseException):
+                    assistant.content = partial
+                    await ctx.db.commit()
 
         assistant.content = turn.content or None
         assistant.tool_calls = turn.tool_calls or None
@@ -330,7 +361,24 @@ async def _execute_batch(
                 logger.exception("tool call failed: %s", inv.tool_name)
                 return inv, None, str(exc)
 
-    for coro in asyncio.as_completed([run(inv) for inv, _ in batch]):
+    # Held explicitly rather than left to `as_completed`: if this generator is
+    # closed part-way through — the analyst pressed Stop — the tasks it wrapped
+    # would otherwise keep running, and with them the SecOps queries behind
+    # them. The `finally` below cancels whatever is still outstanding.
+    tasks = [asyncio.create_task(run(inv)) for inv, _ in batch]
+    try:
+        async for event in _drain_batch(ctx, tasks):
+            yield event
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+
+
+async def _drain_batch(
+    ctx: TurnContext, tasks: list[asyncio.Task]
+) -> AsyncIterator[dict[str, Any]]:
+    for coro in asyncio.as_completed(tasks):
         inv, result, error = await coro
         inv.completed_at = datetime.now(UTC)
 

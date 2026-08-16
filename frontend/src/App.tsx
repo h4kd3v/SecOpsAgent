@@ -53,19 +53,6 @@ export default function App() {
     if (activeId === id) setActiveId(null);
   };
 
-  const clearAll = async () => {
-    const count = sidebar.conversations.length;
-    if (!count) return;
-    if (
-      !window.confirm(
-        `Archive all ${count} conversation${count > 1 ? "s" : ""}? ` +
-          "They leave the sidebar; the transcripts stay in the database for audit.",
-      )
-    )
-      return;
-    await Promise.all(sidebar.conversations.map((c) => api.archiveConversation(c.id)));
-    setActiveId(null);
-  };
 
   const send = async (text: string) => {
     // First message of a fresh session: create the thread, then let the effect
@@ -115,7 +102,6 @@ export default function App() {
           onSelect={setActiveId}
           onNew={newConversation}
           onArchive={archive}
-          onClearAll={clearAll}
           onOpenSettings={() => setShowSettings(true)}
         />
         <ChatView

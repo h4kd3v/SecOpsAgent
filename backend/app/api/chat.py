@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import uuid
@@ -9,18 +10,21 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
-from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.conversations import owned_conversation
 from app.api.deps import current_session, message_limiter
-from app.db.models import AnonSession, Conversation, Message
+from app.db.models import AnonSession, Conversation
 from app.db.session import SessionMaker, get_db
 from app.schemas import ApprovalRequest, SendMessageRequest
+from app.services import repository as repo
 from app.services.agent_loop import TurnContext, resume_turn, run_turn
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/conversations", tags=["chat"])
+
+# Cleanup tasks for cancelled turns, kept alive against the GC.
+_CLEANUP_TASKS: set[asyncio.Task] = set()
 
 SSE_HEADERS = {
     "Cache-Control": "no-cache, no-transform",
@@ -53,36 +57,62 @@ async def _stream(
         ctx = TurnContext(db=db, conversation=conversation, session=session)
         generator = run_turn(ctx, payload) if driver == "message" else resume_turn(ctx, payload)
 
+        interrupted = False
+        detached = False
         try:
             async for event in generator:
                 if await request.is_disconnected():
                     logger.info(
-                        "client disconnected mid-turn; loop state is persisted",
+                        "client disconnected mid-turn; cancelling the turn",
                         extra={"conversation_id": str(conversation_id)},
                     )
+                    interrupted = True
                     break
                 yield _sse(event)
-        except asyncio.CancelledError:
+        except (asyncio.CancelledError, GeneratorExit):
+            # Stop, or the tab went away. This scope is already being torn
+            # down, so anything awaited here would itself be cancelled part
+            # way through — hand the cleanup to a task that outlives us.
+            interrupted = detached = True
+            _finish_detached(generator, conversation_id)
             raise
         except Exception as exc:  # noqa: BLE001 - never leak a traceback to the UI
             logger.exception("agent loop crashed")
+            interrupted = True
             yield _sse({"type": "error", "message": f"Internal error: {exc}"})
         finally:
-            # A disconnect leaves the in-flight assistant row marked
-            # 'streaming'. Settle it so the next turn replays cleanly.
-            try:
-                await db.execute(
-                    update(Message)
-                    .where(
-                        Message.conversation_id == conversation_id,
-                        Message.status == "streaming",
-                    )
-                    .values(status="complete")
-                )
-                await db.commit()
-            except Exception:  # noqa: BLE001
-                logger.warning("failed to settle streaming rows", exc_info=True)
-            yield "event: stream_end\ndata: {}\n\n"
+            if not detached and interrupted:
+                # Closing the loop cancels the in-flight completion and every
+                # outstanding MCP call; settling records what that left behind.
+                with contextlib.suppress(Exception):
+                    await generator.aclose()
+                try:
+                    await repo.settle_interrupted_turn(db, conversation_id)
+                except Exception:  # noqa: BLE001
+                    logger.warning("failed to settle an interrupted turn", exc_info=True)
+
+        # Deliberately outside the `finally`: yielding while a GeneratorExit is
+        # in flight raises "async generator ignored GeneratorExit".
+        yield "event: stream_end\ndata: {}\n\n"
+
+
+def _finish_detached(generator: AsyncIterator[dict[str, Any]], conversation_id: uuid.UUID) -> None:
+    """Close the agent loop and repair the transcript, off the cancelled task."""
+
+    async def finish() -> None:
+        with contextlib.suppress(Exception):
+            await generator.aclose()
+        try:
+            async with SessionMaker() as db:
+                await repo.settle_interrupted_turn(db, conversation_id)
+        except Exception:  # noqa: BLE001
+            logger.warning("failed to settle a cancelled turn", exc_info=True)
+
+    task = asyncio.create_task(finish())
+    # asyncio keeps only a weak reference to running tasks, so a bare
+    # create_task can be garbage-collected before it finishes.
+    _CLEANUP_TASKS.add(task)
+    task.add_done_callback(_CLEANUP_TASKS.discard)
 
 
 @router.post("/{conversation_id}/messages")

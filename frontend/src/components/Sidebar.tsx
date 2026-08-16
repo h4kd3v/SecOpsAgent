@@ -10,7 +10,6 @@ interface Props {
   onSelect: (id: string) => void;
   onNew: () => void;
   onArchive: (id: string) => void;
-  onClearAll: () => void;
   onOpenSettings: () => void;
 }
 
@@ -39,7 +38,6 @@ export function Sidebar({
   onSelect,
   onNew,
   onArchive,
-  onClearAll,
   onOpenSettings,
 }: Props) {
   const [query, setQuery] = useState("");
@@ -110,13 +108,11 @@ export function Sidebar({
         />
       )}
 
+      {/* No "Clear All" here on purpose: one click that empties an analyst's
+          entire history is a lot of damage for a button nobody needs daily.
+          Individual threads can still be archived from their own row. */}
       <div className="list-head">
         <span>Your conversations</span>
-        {conversations.length > 0 && (
-          <button className="link-btn" onClick={onClearAll}>
-            Clear All
-          </button>
-        )}
       </div>
 
       <nav className="conversation-list">

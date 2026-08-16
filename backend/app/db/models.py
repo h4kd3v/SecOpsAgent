@@ -54,6 +54,10 @@ INVOCATION_STATUSES = (
     "succeeded",
     "failed",
     "timeout",
+    # The analyst pressed Stop while this call was in flight. Distinct from
+    # "failed": nothing went wrong, and the tool may well have run to
+    # completion on the SecOps side before the cancellation landed.
+    "cancelled",
 )
 
 

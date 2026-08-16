@@ -243,13 +243,30 @@ class _SessionActor:
                     cmd.future.set_result(None)
                 return
             started = time.perf_counter()
-            try:
-                raw = await asyncio.wait_for(
+            call = asyncio.ensure_future(
+                asyncio.wait_for(
                     session.call_tool(cmd.name, cmd.arguments),
                     timeout=settings.mcp_tool_timeout,
                 )
+            )
+            # Stop has to mean stop. When the analyst aborts, the coroutine
+            # awaiting `cmd.future` is cancelled, which cancels the future;
+            # forward that into the request so the SDK emits
+            # notifications/cancelled and SecOps drops a query nobody will
+            # read. Without this the actor happily finishes a five-minute
+            # search into a session that has already gone away.
+            cmd.future.add_done_callback(
+                lambda fut, task=call: task.cancel() if fut.cancelled() else None
+            )
+            try:
+                raw = await call
                 if not cmd.future.done():
                     cmd.future.set_result((raw, _ms(started)))
+            except asyncio.CancelledError:
+                if cmd.future.cancelled():
+                    logger.info("tool call cancelled by caller: %s", cmd.name)
+                    continue
+                raise  # the actor itself is shutting down
             except asyncio.TimeoutError:
                 if not cmd.future.done():
                     cmd.future.set_exception(

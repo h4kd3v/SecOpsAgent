@@ -477,6 +477,18 @@ body {
 }
 @keyframes blink { 50% { opacity: 0.15; } }
 
+.stopped-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.55rem;
+  padding: 0.25rem 0.65rem;
+  border-radius: 999px;
+  background: var(--line-soft);
+  color: var(--text-dim);
+  font-size: 0.76rem;
+}
+
 .turn-footer {
   display: flex;
   align-items: center;
@@ -750,7 +762,32 @@ body {
   font-family: var(--mono);
   margin: 0.5rem 0;
 }
-.tool-list { list-style: none; padding: 0; margin: 0.75rem 0 0; }
+.tool-search {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin: 1rem 0 0.75rem;
+  padding: 0.55rem 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--shell);
+  color: var(--text-mute);
+}
+.tool-search:focus-within { border-color: var(--accent); color: var(--accent); }
+.tool-search input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.88rem;
+}
+
+.link-btn.inline { font-size: inherit; font-weight: 600; }
+
+.tool-list { list-style: none; padding: 0; margin: 0.25rem 0 0; }
 .tool-list li { padding: 0.65rem 0; border-top: 1px solid var(--line); }
 .tool-list-head { display: flex; align-items: center; gap: 0.5rem; }
 .tool-list-head code { font-family: var(--mono); color: var(--accent); font-size: 0.85rem; }

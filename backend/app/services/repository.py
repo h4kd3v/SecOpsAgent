@@ -5,7 +5,7 @@ from typing import Any
 
 from datetime import timedelta
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import AuditEvent, Conversation, Message, ToolInvocation, utcnow
@@ -61,6 +61,11 @@ def to_wire(messages: list[Message]) -> list[dict[str, Any]]:
     wire: list[dict[str, Any]] = []
     for m in messages:
         if m.status == "error":
+            continue
+        if m.status == "cancelled" and not m.content and not m.tool_calls:
+            # Stopped before the model produced anything. Partial text is kept
+            # — it is real context — but an empty assistant turn is rejected
+            # outright by some gateways.
             continue
         if m.role == "assistant":
             entry: dict[str, Any] = {"role": "assistant", "content": m.content or ""}
@@ -156,6 +161,77 @@ async def delete_empty_conversations(db: AsyncSession, older_than_hours: float) 
     removed = len(result.fetchall())
     await db.commit()
     return removed
+
+
+CANCEL_NOTE = (
+    "Tool call cancelled: the analyst stopped this turn before the tool returned. "
+    "No result is available."
+)
+
+
+async def settle_interrupted_turn(db: AsyncSession, conversation_id: uuid.UUID) -> bool:
+    """Bring a turn that was cut short back to a state the next one can build on.
+
+    Three things are left dangling when a turn is aborted mid-flight:
+
+    1. The assistant row is still `streaming`. Its partial text is real work —
+       the analyst watched it arrive — so it is kept and marked `cancelled`
+       rather than discarded.
+    2. Invocations are still `running` even though their calls were cancelled.
+    3. Most importantly, a `tool_call` may have no matching `tool` reply. The
+       chat completions API rejects that transcript outright, so an aborted
+       turn would poison every later turn in the conversation. Each orphan gets
+       an explicit reply saying it was cancelled, which is also the honest
+       thing to show the model.
+    """
+    changed = False
+
+    result = await db.execute(
+        update(Message)
+        .where(Message.conversation_id == conversation_id, Message.status == "streaming")
+        .values(status="cancelled")
+        .returning(Message.id)
+    )
+    if result.fetchall():
+        changed = True
+
+    running = await db.execute(
+        select(ToolInvocation).where(
+            ToolInvocation.conversation_id == conversation_id,
+            ToolInvocation.status == "running",
+        )
+    )
+    for inv in running.scalars():
+        inv.status = "cancelled"
+        inv.completed_at = utcnow()
+        inv.error = "cancelled by the analyst"
+        changed = True
+
+    history = await load_history(db, conversation_id)
+    replied = {m.tool_call_id for m in history if m.role == "tool" and m.tool_call_id}
+    # A parked write is a legitimate resting state, not damage: its reply
+    # arrives when the analyst approves or declines it.
+    parked = {
+        inv.tool_call_id
+        for inv in (await pending_invocations(db, conversation_id))
+    }
+
+    for message in history:
+        if message.role != "assistant" or not message.tool_calls:
+            continue
+        for call in message.tool_calls:
+            call_id = call.get("id") if isinstance(call, dict) else None
+            if not call_id or call_id in replied or call_id in parked:
+                continue
+            await add_message(
+                db, conversation_id, "tool", tool_call_id=call_id, content=CANCEL_NOTE
+            )
+            replied.add(call_id)
+            changed = True
+
+    if changed:
+        await db.commit()
+    return changed
 
 
 async def audit(

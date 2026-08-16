@@ -114,6 +114,14 @@ export function ChatView(props: Props) {
                   .map((i) => (
                     <ToolCard key={i.id} invocation={i} />
                   ))}
+                {message.status === "cancelled" && (
+                  <div className="stopped-note">
+                    <IconStop size={12} />
+                    {hasText(message)
+                      ? "You stopped this answer — it is incomplete."
+                      : "You stopped this turn before the model replied."}
+                  </div>
+                )}
                 {hasText(message) && (
                 <div className="turn-footer">
                   <div className="turn-actions">

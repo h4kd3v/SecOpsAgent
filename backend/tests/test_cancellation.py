@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import uuid
 
 import pytest
 
@@ -407,3 +408,56 @@ async def _drain_cleanup() -> None:
             await asyncio.gather(*pending, return_exceptions=True)
             return
         await asyncio.sleep(0.02)
+
+
+async def test_an_interrupted_turn_reopens_with_what_it_got(db):
+    """What the analyst sees after refreshing mid-turn.
+
+    The transcript endpoint has to carry the partial answer and say it was cut
+    short — otherwise a refresh looks like the question was never asked.
+    """
+    import httpx
+    from httpx import ASGITransport
+
+    from app.main import app
+
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.post("/api/session")
+        conversation_id = (await client.post("/api/conversations")).json()["id"]
+
+        async with SessionMaker() as setup:
+            await repo.add_message(setup, uuid.UUID(conversation_id), "user", content="hi")
+            await repo.add_message(
+                setup,
+                uuid.UUID(conversation_id),
+                "assistant",
+                content="Twelve alerts fired",
+                status="streaming",
+            )
+            await setup.commit()
+            await repo.settle_interrupted_turn(setup, uuid.UUID(conversation_id))
+
+        detail = (await client.get(f"/api/conversations/{conversation_id}")).json()
+
+    answer = [m for m in detail["messages"] if m["role"] == "assistant"][0]
+    assert answer["content"] == "Twelve alerts fired"
+    assert answer["status"] == "cancelled"
+    # And the thread is findable again rather than stuck on the default.
+    assert detail["conversation"]["title"] != "New conversation"
+
+
+async def test_a_conversation_that_is_gone_is_reported_as_missing(db):
+    """A URL restored after the thread was archived must 404, not 500: the UI
+    falls back to a new chat on exactly this signal."""
+    import httpx
+    from httpx import ASGITransport
+
+    from app.main import app
+
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.post("/api/session")
+        response = await client.get(f"/api/conversations/{uuid.uuid4()}")
+
+    assert response.status_code == 404

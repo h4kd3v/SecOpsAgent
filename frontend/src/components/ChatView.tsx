@@ -129,8 +129,8 @@ export function ChatView(props: Props) {
                   <div className="stopped-note">
                     <IconStop size={12} />
                     {hasText(message)
-                      ? "You stopped this answer — it is incomplete."
-                      : "You stopped this turn before the model replied."}
+                      ? "Interrupted — this answer stops where the model got to."
+                      : "Interrupted before the model replied."}
                   </div>
                 )}
                 {/* Read from the message, not from the live stream, so it is

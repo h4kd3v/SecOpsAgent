@@ -5,6 +5,7 @@ import { IconTools } from "./components/Icons";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { Sidebar } from "./components/Sidebar";
 import { ToolsPanel } from "./components/ToolsPanel";
+import { useActiveConversation } from "./hooks/useActiveConversation";
 import { useChatStream } from "./hooks/useChatStream";
 import { useSidebar } from "./hooks/useSidebar";
 import type { AppConfig, Session } from "./types";
@@ -13,7 +14,8 @@ export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [bootError, setBootError] = useState<string | null>(null);
-  const [activeId, setActiveId] = useState<string | null>(null);
+  // In the URL, so a refresh reopens the thread the analyst was reading.
+  const [activeId, setActiveId] = useActiveConversation();
   const [queued, setQueued] = useState<string | null>(null);
   const [showTools, setShowTools] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -37,7 +39,34 @@ export default function App() {
     // The title also arrives over /api/events; nothing to do here.
   }, []);
 
-  const chat = useChatStream(activeId, onTitle);
+  // A thread can vanish between reloads (archived elsewhere, or a stale URL).
+  const forgetActive = useCallback(() => setActiveId(null), [setActiveId]);
+  const chat = useChatStream(activeId, onTitle, forgetActive);
+
+  // Refreshing mid-turn is a Stop the analyst may not have meant. Browsers
+  // show their own wording here and ignore ours, so there is no message to
+  // set — the point is that the dialog appears at all.
+  useEffect(() => {
+    if (!chat.busy) return;
+    const confirmLeave = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      // Still required by Chrome to raise the dialog.
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", confirmLeave);
+    return () => window.removeEventListener("beforeunload", confirmLeave);
+  }, [chat.busy]);
+
+  // They went ahead. Abort explicitly rather than letting the socket die on
+  // its own: the backend cancels the completion and every in-flight tool call
+  // the moment it sees the disconnect, and checkpointed text up to that point
+  // is already on the row. `pagehide` fires for reload, navigation and close
+  // alike, where `unload` is deprecated and skipped by the bfcache.
+  useEffect(() => {
+    const abort = () => chat.stop();
+    window.addEventListener("pagehide", abort);
+    return () => window.removeEventListener("pagehide", abort);
+  }, [chat.stop]);
 
   // Deliberately does NOT create anything. A conversation is a container for
   // messages; one with no messages is a row nobody asked for. `send()` below

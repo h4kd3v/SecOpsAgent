@@ -36,7 +36,11 @@ function appendText(
   return [...segments, { kind, key: `${kind}-${segments.length}`, text }];
 }
 
-export function useChatStream(conversationId: string | null, onTitle: (t: string) => void) {
+export function useChatStream(
+  conversationId: string | null,
+  onTitle: (t: string) => void,
+  onMissing?: () => void,
+) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [invocations, setInvocations] = useState<Invocation[]>([]);
   const [totalTokens, setTotalTokens] = useState(0);
@@ -47,9 +51,30 @@ export function useChatStream(conversationId: string | null, onTitle: (t: string
   const [warning, setWarning] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
+  // Held in a ref so `refresh` keeps a stable identity: it is a dependency of
+  // the effect below and of `drive`.
+  const missingRef = useRef(onMissing);
+  useEffect(() => {
+    missingRef.current = onMissing;
+  }, [onMissing]);
+
   const refresh = useCallback(async () => {
     if (!conversationId) return null;
-    const detail = await api.getConversation(conversationId);
+    let detail;
+    try {
+      detail = await api.getConversation(conversationId);
+    } catch (err) {
+      // A conversation id can outlive the thread it names — restored from the
+      // URL after it was archived, or typed in by hand. The API answers 404
+      // for anything this session does not own, so treat both the same and
+      // fall back to a new chat rather than leaving a dead screen.
+      setMessages([]);
+      setInvocations([]);
+      setTotalTokens(0);
+      setPending([]);
+      missingRef.current?.();
+      return null;
+    }
     setMessages(detail.messages);
     setInvocations(detail.invocations);
     setTotalTokens(detail.total_tokens);
@@ -68,6 +93,23 @@ export function useChatStream(conversationId: string | null, onTitle: (t: string
       setInvocations([]);
     }
   }, [conversationId, refresh]);
+
+  // Reloading mid-turn races the server's cleanup: the fresh page can fetch
+  // the transcript in the time it takes the backend to notice the disconnect
+  // and settle the row. Without this the analyst is left looking at a
+  // half-written answer with nothing to say why it stopped. Bounded, because
+  // a row can also be legitimately streaming in another tab.
+  const unsettled = messages.some((m) => m.status === "streaming");
+  useEffect(() => {
+    if (busy || !unsettled) return;
+    let attempts = 0;
+    const timer = window.setInterval(() => {
+      attempts += 1;
+      void refresh();
+      if (attempts >= 3) window.clearInterval(timer);
+    }, 900);
+    return () => window.clearInterval(timer);
+  }, [busy, unsettled, refresh]);
 
   const handle = useCallback(
     (event: StreamEvent) => {

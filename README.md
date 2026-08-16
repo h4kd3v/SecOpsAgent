@@ -353,7 +353,7 @@ TEST_DATABASE_URL='postgresql+asyncpg://test:test@localhost:55433/test' \
     .venv/bin/pytest tests -q                  # + integration tests
 ```
 
-99 tests covering the things that actually bite:
+101 tests covering the things that actually bite:
 
 - **Streaming, through the real ASGI app over HTTP** — all 500 chunks of a long
   answer arrive (not just the first), content containing raw newlines, blank
@@ -366,6 +366,10 @@ TEST_DATABASE_URL='postgresql+asyncpg://test:test@localhost:55433/test' \
   not just the first round and the final answer. Reasoning deltas, where the
   gateway exposes them, are streamed and stored but never replayed to the
   model, and the tool query streams as the model composes it.
+- **Refreshing mid-turn** — the open thread is in the URL, so a reload reopens
+  it; the reload is treated exactly as Stop, and the conversation comes back
+  with the partial answer and a note saying it was cut short. A conversation id
+  that no longer resolves falls back to a new chat rather than a dead screen.
 - **Twenty analysts at once** — twenty turns genuinely concurrent over real
   cookies: no stream, transcript or sidebar carries another analyst's work,
   another session gets a 404 rather than a thread it does not own, the event

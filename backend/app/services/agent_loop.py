@@ -310,6 +310,9 @@ async def _drive(ctx: TurnContext) -> AsyncIterator[dict[str, Any]]:
         assistant.token_usage = turn.usage or llm.estimate_usage(
             wire, turn.content, turn.tool_calls
         )
+        # Same transaction as the message, so the thread total and the rows it
+        # sums can never disagree.
+        repo.add_usage(ctx.conversation, assistant.token_usage)
         await repo.touch_conversation(ctx.db, ctx.conversation)
         await ctx.db.commit()
 

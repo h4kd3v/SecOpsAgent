@@ -9,6 +9,12 @@ export interface Conversation {
   title: string;
   created_at: string;
   updated_at: string;
+  /** Running total for the thread, stored server-side rather than summed. */
+  total_tokens?: number;
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  /** True if any turn's usage was approximated because the gateway omitted it. */
+  usage_estimated?: boolean;
 }
 
 export interface Invocation {

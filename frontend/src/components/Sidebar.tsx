@@ -28,6 +28,13 @@ function bucketOf(iso: string): string {
   return "Older";
 }
 
+/** 18432 -> "18.4k". A sidebar row has no space for a full count. */
+function compact(tokens: number): string {
+  if (tokens < 1000) return String(tokens);
+  if (tokens < 1_000_000) return `${(tokens / 1000).toFixed(tokens < 10_000 ? 1 : 0)}k`;
+  return `${(tokens / 1_000_000).toFixed(1)}M`;
+}
+
 const BUCKET_ORDER = ["Today", "Yesterday", "Last 7 days", "Last 30 days", "Older"];
 
 export function Sidebar({
@@ -141,6 +148,20 @@ export function Sidebar({
               >
                 <IconChat size={16} className="conversation-icon" />
                 <span className="conversation-title">{conversation.title}</span>
+                {/* Cost, where an analyst can see it accumulating rather than
+                    only after opening the thread. Hidden on hover so it does
+                    not fight the archive button for the same space. */}
+                {!!conversation.total_tokens && (
+                  <span
+                    className="conversation-tokens"
+                    title={`${conversation.total_tokens.toLocaleString()} tokens${
+                      conversation.usage_estimated ? " (partly estimated)" : ""
+                    }`}
+                  >
+                    {conversation.usage_estimated ? "~" : ""}
+                    {compact(conversation.total_tokens)}
+                  </span>
+                )}
                 <button
                   className="conversation-archive"
                   title="Archive this conversation"

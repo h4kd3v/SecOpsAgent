@@ -91,6 +91,18 @@ class Conversation(Base):
     )
     title: Mapped[str] = mapped_column(String(255), nullable=False, default="New conversation")
     archived: Mapped[bool] = mapped_column(default=False, nullable=False)
+    # Running token totals for the thread, maintained as each turn completes.
+    #
+    # Derivable by summing messages.token_usage, but only by reading every
+    # message of every conversation — which is exactly the query a cost report
+    # across twenty analysts wants to run cheaply. Kept in the same transaction
+    # as the message it counts, so the two cannot drift.
+    prompt_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    completion_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # True once any turn in the thread had its usage approximated because the
+    # gateway omitted it. Marks the total as a floor, not a measurement.
+    usage_estimated: Mapped[bool] = mapped_column(nullable=False, default=False)
     created_at: Mapped[datetime] = _created()
     updated_at: Mapped[datetime] = mapped_column(
         TimestampCol,

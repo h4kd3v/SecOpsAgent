@@ -353,7 +353,7 @@ TEST_DATABASE_URL='postgresql+asyncpg://test:test@localhost:55433/test' \
     .venv/bin/pytest tests -q                  # + integration tests
 ```
 
-110 tests covering the things that actually bite:
+117 tests covering the things that actually bite:
 
 - **Streaming, through the real ASGI app over HTTP** — all 500 chunks of a long
   answer arrive (not just the first), content containing raw newlines, blank
@@ -414,12 +414,48 @@ name does not change if the directory is renamed.
 | Table | One row per | Holds |
 |---|---|---|
 | `anon_sessions` | browser | the label shown in the sidebar, user-agent, source IP, first and last seen. No name, no email, no password — there is no registration |
-| `conversations` | thread | title, owning session, archived flag, created/updated |
+| `conversations` | thread | title, owning session, archived flag, created/updated, and running token totals for the thread |
 | `messages` | turn | role, the analyst's prompt or the model's answer, the model's reasoning, the tool calls it asked for, why a turn failed, token usage, model id, ordering |
 | `tool_invocations` | MCP call | tool name, the exact arguments the model sent, the full result, error, status, whether it was a write, latency, and which session it belonged to |
 | `audit_events` | security event | tool executed, tool denied, approval requested, conversation archived, completion failed (with the raw provider payload), MCP unreachable, tools refreshed |
 | `mcp_tool_catalog` | MCP server | the cached tool definitions and when they were fetched |
 | `alembic_version` | database | which migration the schema is at |
+
+### Prompts and tokens
+
+Every prompt is a row in `messages` with `role = 'user'` and the text in
+`content` — stored before the model is called, so a question survives even when
+the turn that followed it failed.
+
+Tokens are recorded twice, on purpose:
+
+* **Per turn**, in `messages.token_usage` — `{prompt_tokens,
+  completion_tokens, total_tokens, estimated?}`. This is what the UI shows
+  under each answer.
+* **Per thread**, in `conversations.prompt_tokens / completion_tokens /
+  total_tokens`, folded in as each turn commits — the same transaction as the
+  message it counts, so the two cannot drift.
+
+The rollup exists because the per-turn rows answer "what did this thread
+cost?" but not "what did this analyst cost last month?" without reading every
+message in the database:
+
+```sql
+SELECT s.label AS analyst,
+       count(c.id) AS threads,
+       sum(c.total_tokens) AS tokens
+FROM anon_sessions s
+JOIN conversations c ON c.session_id = s.id
+WHERE c.created_at >= date_trunc('month', now())
+GROUP BY s.label
+ORDER BY tokens DESC;
+```
+
+A multi-round turn is counted per round, because that is how it is billed: the
+prompt is re-sent each time the model calls a tool. A turn that failed before
+reaching the model adds nothing. `usage_estimated` marks a thread whose total
+includes an approximation, because some gateways omit usage on streamed
+responses — those totals are a floor, not a measurement.
 
 Two things are deliberately kept apart from `content`: `reasoning`, so the
 model's working is shown as working rather than as the answer, and `error`, so

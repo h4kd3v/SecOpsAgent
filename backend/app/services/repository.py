@@ -113,6 +113,24 @@ def to_wire(messages: list[Message]) -> list[dict[str, Any]]:
     return [m for m in wire if m["role"] != "tool" or m.get("tool_call_id") in asked]
 
 
+def add_usage(conversation: Conversation, usage: dict[str, Any] | None) -> None:
+    """Fold one turn's usage into the thread's running totals.
+
+    Synchronous and in-memory on purpose: the caller commits it alongside the
+    message it came from, so a total can never count a turn that rolled back.
+
+    Failed turns carry no usage — nothing reached the model — and adding zero
+    is the honest answer rather than skipping the row.
+    """
+    if not usage:
+        return
+    conversation.prompt_tokens += int(usage.get("prompt_tokens") or 0)
+    conversation.completion_tokens += int(usage.get("completion_tokens") or 0)
+    conversation.total_tokens += int(usage.get("total_tokens") or 0)
+    if usage.get("estimated"):
+        conversation.usage_estimated = True
+
+
 async def touch_conversation(
     db: AsyncSession, conversation: Conversation, *, notify: bool = True
 ) -> None:
@@ -139,6 +157,8 @@ async def notify_conversation(
                 "title": conversation.title,
                 "created_at": conversation.created_at,
                 "updated_at": conversation.updated_at,
+                "total_tokens": conversation.total_tokens,
+                "usage_estimated": conversation.usage_estimated,
             },
         },
     )

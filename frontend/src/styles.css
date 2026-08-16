@@ -216,6 +216,15 @@ body {
 .conversation-icon { flex-shrink: 0; opacity: 0.75; }
 .conversation-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+.conversation-tokens {
+  flex-shrink: 0;
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-mute);
+  opacity: 0.85;
+}
+.conversation:hover .conversation-tokens { display: none; }
+
 .conversation-archive {
   display: grid;
   place-items: center;

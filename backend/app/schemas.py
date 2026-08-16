@@ -18,6 +18,12 @@ class ConversationOut(BaseModel):
     title: str
     created_at: datetime
     updated_at: datetime
+    # Running totals for the thread. Stored, not summed per request, so a cost
+    # report across every analyst is one cheap query.
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    usage_estimated: bool = False
 
 
 class RenameRequest(BaseModel):

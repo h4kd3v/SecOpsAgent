@@ -85,7 +85,9 @@ async def get_conversation(
         conversation=ConversationOut.model_validate(conversation, from_attributes=True),
         messages=[MessageOut.model_validate(m, from_attributes=True) for m in messages],
         invocations=[_invocation_out(i) for i in invocations],
-        total_tokens=sum((m.token_usage or {}).get("total_tokens", 0) or 0 for m in messages),
+        # The stored running total, not a sum over the rows just fetched: the
+        # two are written in one transaction, and only one of them scales.
+        total_tokens=conversation.total_tokens,
     )
 
 

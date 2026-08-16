@@ -368,7 +368,13 @@ async def test_a_saved_conversation_reopens_with_everything_intact(wired, monkey
     invocation = reopened["invocations"][0]
     assert invocation["tool_name"] == "search_udm"
     assert invocation["status"] == "succeeded"
-    assert invocation["result"]["text"] == "4 events matched"
+    # The transcript carries a bounded preview; the full text stays reachable.
+    assert invocation["result_preview"] == "4 events matched"
+    assert invocation["result_chars"] == len("4 events matched")
+    full = await client.get(
+        f"/api/conversations/{conversation_id}/invocations/{invocation['id']}/result"
+    )
+    assert full.json()["text"] == "4 events matched"
     assert reopened["total_tokens"] > 0
 
 

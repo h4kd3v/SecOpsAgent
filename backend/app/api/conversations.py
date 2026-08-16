@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import current_session
-from app.db.models import AnonSession, Conversation
+from app.db.models import AnonSession, Conversation, ToolInvocation
 from app.db.session import get_db
 from app.schemas import (
     AppConfigOut,
@@ -84,9 +84,46 @@ async def get_conversation(
     return ConversationDetail(
         conversation=ConversationOut.model_validate(conversation, from_attributes=True),
         messages=[MessageOut.model_validate(m, from_attributes=True) for m in messages],
-        invocations=[InvocationOut.model_validate(i, from_attributes=True) for i in invocations],
+        invocations=[_invocation_out(i) for i in invocations],
         total_tokens=sum((m.token_usage or {}).get("total_tokens", 0) or 0 for m in messages),
     )
+
+
+def _invocation_out(invocation: ToolInvocation) -> InvocationOut:
+    preview, total = repo.invocation_preview(invocation)
+    return InvocationOut(
+        id=invocation.id,
+        tool_call_id=invocation.tool_call_id,
+        tool_name=invocation.tool_name,
+        arguments=invocation.arguments,
+        status=invocation.status,
+        is_write=invocation.is_write,
+        latency_ms=invocation.latency_ms,
+        error=invocation.error,
+        result_preview=preview,
+        result_chars=total,
+    )
+
+
+@router.get("/conversations/{conversation_id}/invocations/{invocation_id}/result")
+async def invocation_result(
+    conversation_id: uuid.UUID,
+    invocation_id: uuid.UUID,
+    session: AnonSession = Depends(current_session),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, object]:
+    """The full text a tool returned, fetched only when an analyst opens it.
+
+    Kept off the transcript because a single UDM page runs to hundreds of
+    kilobytes and every turn ends in a reload of the whole thread.
+    """
+    await owned_conversation(conversation_id, session, db)
+    invocation = await db.get(ToolInvocation, invocation_id)
+    # Scoped to the conversation as well as the session: an id from another
+    # thread must not resolve just because both belong to the same visitor.
+    if invocation is None or invocation.conversation_id != conversation_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Tool call not found")
+    return {"id": str(invocation.id), "text": repo.result_text(invocation)}
 
 
 @router.patch("/conversations/{conversation_id}", response_model=ConversationOut)
@@ -127,7 +164,7 @@ async def archive_conversation(
 async def _catalog(db: AsyncSession, *, force: bool) -> ToolCatalogOut:
     try:
         catalog = await tool_catalog.get(db, force=force)
-    except (McpUnavailable, Exception) as exc:  # noqa: BLE001
+    except McpUnavailable as exc:
         # 503 with the root cause, not a 500 with a stack trace: this endpoint
         # is the first thing anyone checks when wiring up a new MCP server.
         raise HTTPException(

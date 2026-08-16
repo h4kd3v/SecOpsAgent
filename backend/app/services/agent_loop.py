@@ -37,7 +37,6 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 MAX_PARALLEL_TOOLS = 4
-RESULT_PREVIEW_CHARS = 400
 # How often a partially streamed answer is checkpointed to the database,
 # so pressing Stop keeps the text already on screen. One UPDATE per second
 # per in-flight turn is noise next to the completion it accompanies.
@@ -56,6 +55,7 @@ def _event(kind: str, **payload: Any) -> dict[str, Any]:
 
 
 def _invocation_dto(inv: ToolInvocation) -> dict[str, Any]:
+    preview, total = repo.invocation_preview(inv)
     return {
         "id": str(inv.id),
         "tool_call_id": inv.tool_call_id,
@@ -65,9 +65,10 @@ def _invocation_dto(inv: ToolInvocation) -> dict[str, Any]:
         "is_write": inv.is_write,
         "latency_ms": inv.latency_ms,
         "error": inv.error,
-        "result_preview": (inv.result or {}).get("text", "")[:RESULT_PREVIEW_CHARS]
-        if inv.result
-        else None,
+        # Same shape the REST transcript returns, so a card looks identical
+        # whether it arrived over the stream or after a reload.
+        "result_preview": preview,
+        "result_chars": total,
     }
 
 

@@ -112,7 +112,7 @@ class ToolCatalog:
                 extra={"tools": len(specs), "ttl_hours": settings.tool_cache_ttl_hours},
             )
             return Catalog(_visible(specs), fetched_at, "live")
-        except (McpUnavailable, Exception) as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 - any failure serves stale
             detail = mcp_manager.last_error or str(exc)
             if row is not None:
                 # Expired but present. Serving it beats failing the request:

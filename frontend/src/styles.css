@@ -614,6 +614,9 @@ body {
   text-overflow: ellipsis;
 }
 
+.tool-size { font-weight: 400; text-transform: none; letter-spacing: 0; }
+.tool-load-error { color: var(--danger); font-size: 0.78rem; margin-top: 0.4rem; }
+
 .tool-card.pending { border-style: dashed; border-color: var(--accent-soft); }
 .tool-head.as-row { cursor: default; }
 .tool-head.as-row:hover { background: none; }

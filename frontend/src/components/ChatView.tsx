@@ -30,6 +30,7 @@ interface Props {
   totalTokens: number;
   modelDisplayName: string;
   sessionInitials: string;
+  conversationId: string | null;
   onSend: (text: string) => void;
   onDecide: (d: { invocation_id: string; decision: "approve" | "deny" }[]) => void;
   onStop: () => void;
@@ -123,7 +124,11 @@ export function ChatView(props: Props) {
                 {invocations
                   .filter((i) => i.tool_call_id && messageOwnsCall(message, i))
                   .map((i) => (
-                    <ToolCard key={i.id} invocation={i} />
+                    <ToolCard
+                      key={i.id}
+                      invocation={i}
+                      conversationId={props.conversationId}
+                    />
                   ))}
                 {message.status === "cancelled" && (
                   <div className="stopped-note">
@@ -187,7 +192,11 @@ export function ChatView(props: Props) {
                 put later analysis above the tool call it came from. */}
             {live.segments.map((segment) =>
               segment.kind === "tool" ? (
-                <ToolCard key={segment.key} invocation={segment.invocation} />
+                <ToolCard
+                  key={segment.key}
+                  invocation={segment.invocation}
+                  conversationId={props.conversationId}
+                />
               ) : segment.kind === "draft" ? (
                 <PendingToolCard
                   key={segment.key}

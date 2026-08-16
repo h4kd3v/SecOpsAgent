@@ -27,8 +27,10 @@ export interface Invocation {
   is_write: boolean;
   latency_ms: number | null;
   error: string | null;
-  result?: { text?: string } | null;
+  /** First slice of what the tool returned. The rest is fetched on demand. */
   result_preview?: string | null;
+  /** Total characters the tool returned, so the UI knows if there is more. */
+  result_chars?: number;
 }
 
 export interface TokenUsage {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { ChatView } from "./components/ChatView";
 import { IconTools } from "./components/Icons";
@@ -83,13 +83,25 @@ export default function App() {
   };
 
 
+  // `busy` only goes true once the stream opens, which is after a round trip.
+  // Two quick clicks on the prompt cards both saw `busy === false`, each
+  // created a conversation, and the second overwrote the first as active —
+  // leaving an empty thread behind, the exact debris the UI exists to avoid.
+  const starting = useRef(false);
+
   const send = async (text: string) => {
     // First message of a fresh session: create the thread, then let the effect
     // below fire once `useChatStream` has rebound to the new conversation id.
     if (!activeId) {
-      const conversation = await api.createConversation();
-      setActiveId(conversation.id);
-      setQueued(text);
+      if (starting.current) return;
+      starting.current = true;
+      try {
+        const conversation = await api.createConversation();
+        setActiveId(conversation.id);
+        setQueued(text);
+      } finally {
+        starting.current = false;
+      }
       return;
     }
     await chat.send(text);
@@ -144,6 +156,7 @@ export default function App() {
           totalTokens={chat.totalTokens}
           modelDisplayName={config?.model_display_name ?? ""}
           sessionInitials={initials}
+          conversationId={activeId}
           onSend={send}
           onDecide={chat.decide}
           onStop={chat.stop}

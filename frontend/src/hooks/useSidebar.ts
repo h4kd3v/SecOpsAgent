@@ -41,8 +41,11 @@ export function useSidebar(enabled: boolean) {
       const without = list.filter((c) => c.id !== incoming.id);
       const merged = [...without, incoming];
       // Server orders by updated_at desc; mirror that so positions match
-      // after a refresh.
-      merged.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+      // after a refresh. Compared as instants, not as strings: string order
+      // only agrees with time order while every timestamp shares a format.
+      merged.sort(
+        (a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at),
+      );
       return merged;
     });
   }, []);

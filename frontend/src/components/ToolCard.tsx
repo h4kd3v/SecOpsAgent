@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { api } from "../api";
 import type { Invocation } from "../types";
 
 const LABELS: Record<Invocation["status"], string> = {
@@ -19,29 +20,60 @@ const QUERY_KEYS = ["query", "udm_query", "q", "search", "filter", "expression"]
  *
  * The analyst's first question about any tool call is "what did it search
  * for?", and burying that behind a toggle means expanding every card to read
- * the trail. The raw *result* stays collapsed — that is bulk data for the
- * model, not something to dump into the conversation.
+ * the trail.
  */
 function summarise(args: Record<string, unknown>): string {
   for (const key of QUERY_KEYS) {
     const value = args[key];
     if (typeof value === "string" && value.trim()) return value;
   }
-  const parts = Object.entries(args).map(
-    ([key, value]) =>
-      `${key}=${typeof value === "string" ? value : JSON.stringify(value)}`,
-  );
-  return parts.join("  ");
+  return Object.entries(args)
+    .map(([key, value]) => `${key}=${typeof value === "string" ? value : JSON.stringify(value)}`)
+    .join("  ");
+}
+
+interface Props {
+  invocation: Invocation;
+  /** Needed to fetch the rest of a result; absent while the turn is still live. */
+  conversationId?: string | null;
 }
 
 /**
  * Analysts must be able to trace any claim back to the SecOps query that
  * produced it, so arguments and raw output are always one click away.
+ *
+ * The transcript carries only the first slice of a result. Chronicle returns
+ * hundreds of kilobytes per page, and every turn ends in a reload of the whole
+ * thread — shipping all of it made reopening an investigation a multi-megabyte
+ * download of data already on screen. The rest is fetched when someone asks
+ * for it, which is rare and cheap.
  */
-export function ToolCard({ invocation }: { invocation: Invocation }) {
+export function ToolCard({ invocation, conversationId }: Props) {
   const [open, setOpen] = useState(false);
-  const output = invocation.result?.text ?? invocation.result_preview ?? invocation.error ?? "";
+  const [full, setFull] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const preview = invocation.result_preview ?? "";
+  const total = invocation.result_chars ?? preview.length;
+  const shown = full ?? preview;
+  const withheld = total - shown.length;
+  const output = shown || invocation.error || "";
   const query = summarise(invocation.arguments ?? {});
+
+  const loadRest = async () => {
+    if (!conversationId) return;
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const result = await api.invocationResult(conversationId, invocation.id);
+      setFull(result.text);
+    } catch (err) {
+      setLoadError((err as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <div className={`tool-card status-${invocation.status}`}>
@@ -63,8 +95,24 @@ export function ToolCard({ invocation }: { invocation: Invocation }) {
           <pre>{JSON.stringify(invocation.arguments, null, 2)}</pre>
           {output && (
             <>
-              <div className="tool-section-label">output</div>
+              <div className="tool-section-label">
+                output
+                {total > 0 && (
+                  <span className="tool-size">
+                    {" "}
+                    · {total.toLocaleString()} characters
+                  </span>
+                )}
+              </div>
               <pre>{output}</pre>
+              {withheld > 0 && conversationId && (
+                <button className="link-btn" disabled={loading} onClick={loadRest}>
+                  {loading
+                    ? "Loading…"
+                    : `Show the remaining ${withheld.toLocaleString()} characters`}
+                </button>
+              )}
+              {loadError && <div className="tool-load-error">{loadError}</div>}
             </>
           )}
         </div>

@@ -31,9 +31,11 @@ HEARTBEAT_SECONDS = 25
 async def sidebar_events(
     request: Request, session: AnonSession = Depends(current_session)
 ) -> StreamingResponse:
-    queue = event_bus.subscribe(session.id)
-
     async def generator() -> AsyncIterator[str]:
+        # Subscribed here rather than above so the unsubscribe in `finally` is
+        # guaranteed to pair with it: a response that is never iterated would
+        # otherwise leave a queue registered for the life of the process.
+        queue = event_bus.subscribe(session.id)
         # Tell the client to load the current list before streaming deltas, so
         # a reconnect after downtime can't leave a stale sidebar.
         yield 'event: resync\ndata: {"type": "resync"}\n\n'

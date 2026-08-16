@@ -41,6 +41,13 @@ export const api = {
       invocations: Invocation[];
       total_tokens: number;
     }>(`/api/conversations/${id}`),
+  /** The full text of one tool result, deliberately not carried by the
+   *  transcript — a single UDM page runs to hundreds of kilobytes. */
+  invocationResult: (conversationId: string, invocationId: string) =>
+    request<{ id: string; text: string }>(
+      `/api/conversations/${conversationId}/invocations/${invocationId}/result`,
+    ),
+
   archiveConversation: (id: string) =>
     request<void>(`/api/conversations/${id}`, { method: "DELETE" }),
 };

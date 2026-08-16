@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import logging
+import os
 import sys
 import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 
 from app.api import chat, conversations, events, health, session
 from app.config import get_settings
@@ -29,6 +31,50 @@ def configure_logging() -> None:
     root = logging.getLogger()
     root.handlers = [handler]
     root.setLevel(settings.log_level.upper())
+
+
+async def check_connection_budget() -> None:
+    """Refuse to pretend the connection pool fits when it does not.
+
+    Each uvicorn worker opens its own pool, so the ceiling is
+    `(DB_POOL_SIZE + DB_MAX_OVERFLOW) x UVICORN_WORKERS`, plus one raw
+    connection per worker for the event bus listener. Exceed Postgres'
+    max_connections and the failure arrives as "sorry, too many clients
+    already" in the middle of somebody's investigation — worth one query at
+    startup to say so up front instead.
+    """
+    log = logging.getLogger(__name__)
+    workers = int(os.environ.get("UVICORN_WORKERS", "1") or 1)
+    per_worker = settings.db_pool_size + settings.db_max_overflow
+    needed = per_worker * workers + workers
+
+    try:
+        async with SessionMaker() as db:
+            allowed = int((await db.execute(text("SHOW max_connections"))).scalar_one())
+    except Exception:  # noqa: BLE001 - never block startup on a diagnostic
+        log.warning("could not read max_connections", exc_info=True)
+        return
+
+    if needed > allowed:
+        log.error(
+            "database connection budget exceeded: %d workers x (%d pool + %d overflow) "
+            "+ %d listeners = %d, but Postgres allows %d. Lower DB_POOL_SIZE or "
+            "UVICORN_WORKERS, or raise max_connections, or connections will be "
+            "refused under load.",
+            workers,
+            settings.db_pool_size,
+            settings.db_max_overflow,
+            workers,
+            needed,
+            allowed,
+        )
+    else:
+        log.info(
+            "database connection budget: up to %d of %d used by %d worker(s)",
+            needed,
+            allowed,
+            workers,
+        )
 
 
 async def sweep_empty_conversations() -> None:
@@ -60,6 +106,7 @@ async def lifespan(app: FastAPI):
     log = logging.getLogger(__name__)
 
     await event_bus.start()
+    await check_connection_budget()
     await sweep_empty_conversations()
 
     if settings.demo_mode:

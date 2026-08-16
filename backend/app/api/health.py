@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 from fastapi import APIRouter, Response, status
 from sqlalchemy import text
 
@@ -12,6 +14,31 @@ from app.services.mcp_manager import mcp_manager
 
 router = APIRouter(prefix="/api/health", tags=["health"])
 settings = get_settings()
+
+# The MCP and LLM probes are outbound network calls. This endpoint is
+# unauthenticated by design — load balancers cannot hold a session cookie — so
+# without a cache anyone able to reach it could make the backend hammer the
+# SecOps server and the LLM gateway at request rate. Dependency state does not
+# change meaningfully inside this window.
+_PROBE_TTL_SECONDS = 10.0
+_probe_cache: tuple[float, dict[str, object]] | None = None
+
+
+async def _probe_dependencies() -> dict[str, object]:
+    global _probe_cache
+    now = time.monotonic()
+    if _probe_cache is not None and now - _probe_cache[0] < _PROBE_TTL_SECONDS:
+        return _probe_cache[1]
+
+    probes: dict[str, object] = {
+        "mcp": await mcp_manager.healthy(),
+        "llm_proxy": await llm.ping(),
+        # Surfaces token rotation on a dashboard: this should sawtooth between
+        # ~3600 and the configured refresh skew, never sit at 0.
+        "google_token_seconds_remaining": token_manager.seconds_remaining,
+    }
+    _probe_cache = (now, probes)
+    return probes
 
 
 @router.get("/live")
@@ -41,11 +68,7 @@ async def ready(response: Response) -> dict[str, object]:
         checks["mcp"] = "simulated"
         checks["llm_proxy"] = "simulated"
     else:
-        checks["mcp"] = await mcp_manager.healthy()
-        checks["llm_proxy"] = await llm.ping()
-        # Surfaces token rotation on a dashboard: this should sawtooth between
-        # ~3600 and the configured refresh skew, never sit at 0.
-        checks["google_token_seconds_remaining"] = token_manager.seconds_remaining
+        checks.update(await _probe_dependencies())
         missing = settings.missing_required()
         if missing:
             checks["missing_config"] = missing

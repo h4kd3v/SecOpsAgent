@@ -33,7 +33,12 @@ class InvocationOut(BaseModel):
     is_write: bool
     latency_ms: int | None
     error: str | None
-    result: dict[str, Any] | None
+    # Deliberately NOT the whole result. A single UDM page is ~400 KB, and a
+    # thread with five searches made every reload — and every turn, which ends
+    # in a reload — a multi-megabyte download of data the analyst had already
+    # seen. `result_chars` tells the UI whether there is more to fetch.
+    result_preview: str | None = None
+    result_chars: int = 0
 
 
 class MessageOut(BaseModel):

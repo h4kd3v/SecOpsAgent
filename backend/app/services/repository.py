@@ -12,6 +12,25 @@ from app.db.models import AuditEvent, Conversation, Message, ToolInvocation, utc
 from app.services.events import event_bus
 
 
+# How much of a tool result travels with the transcript. Enough to see what
+# came back; small enough that reopening a thread is not a multi-megabyte
+# download. The full text is one request away, and the model always got it in
+# full at the time.
+RESULT_PREVIEW_CHARS = 2000
+
+
+def result_text(invocation: ToolInvocation) -> str:
+    return (invocation.result or {}).get("text") or ""
+
+
+def invocation_preview(invocation: ToolInvocation) -> tuple[str | None, int]:
+    """(preview, total characters). Total lets the UI offer the rest."""
+    text = result_text(invocation)
+    if not text:
+        return None, 0
+    return text[:RESULT_PREVIEW_CHARS], len(text)
+
+
 async def next_seq(db: AsyncSession, conversation_id: uuid.UUID) -> int:
     result = await db.execute(
         select(func.coalesce(func.max(Message.seq), 0)).where(

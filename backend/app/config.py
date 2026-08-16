@@ -104,6 +104,12 @@ class Settings(BaseSettings):
     # when the first message is sent, so any empty row older than this is
     # debris from a failed first turn. 0 disables the sweep.
     empty_conversation_ttl_hours: int = 24
+    # One shared workspace: every analyst sees every conversation in their
+    # sidebar and can contribute to any of them. This is a deliberate trade —
+    # a shift working one incident together beats twenty private transcripts —
+    # but it does mean there is no privacy between analysts. Set false to go
+    # back to per-browser history.
+    shared_workspace: bool = True
     rate_limit_messages_per_minute: int = 20
     cors_origins: str = ""
 

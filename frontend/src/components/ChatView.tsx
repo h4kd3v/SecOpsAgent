@@ -30,6 +30,7 @@ interface Props {
   totalTokens: number;
   modelDisplayName: string;
   sessionInitials: string;
+  sessionLabel: string;
   conversationId: string | null;
   onSend: (text: string) => void;
   onDecide: (d: { invocation_id: string; decision: "approve" | "deny" }[]) => void;
@@ -93,8 +94,17 @@ export function ChatView(props: Props) {
           <div key={message.id} className={`turn ${message.role}`}>
             {message.role === "user" ? (
               <div className="turn-head">
-                <span className="avatar user-avatar">{props.sessionInitials}</span>
-                <div className="user-text">{message.content}</div>
+                <span className="avatar user-avatar">
+                  {initialsFor(message.author_label) || props.sessionInitials}
+                </span>
+                <div className="user-text">
+                  {/* Named only when somebody else asked: on a shared thread
+                      the question is only useful with its asker attached. */}
+                  {message.author_label && message.author_label !== props.sessionLabel && (
+                    <span className="user-author">{message.author_label}</span>
+                  )}
+                  {message.content}
+                </div>
                 <button
                   className="turn-action"
                   title="Copy prompt"
@@ -280,6 +290,17 @@ function liveLength(segments: LiveState["segments"]): number {
       n + (s.kind === "tool" ? 0 : s.kind === "draft" ? s.args.length : s.text.length),
     0,
   );
+}
+
+/** "Analyst 4f2a" -> "A4". Falls back to the viewer's own initials. */
+function initialsFor(label: string | null | undefined): string {
+  if (!label) return "";
+  return label
+    .split(/\s+/)
+    .map((word) => word[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
 }
 
 function hasText(message: Message): boolean {

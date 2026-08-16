@@ -74,7 +74,15 @@ def _invocation_dto(inv: ToolInvocation) -> dict[str, Any]:
 
 async def run_turn(ctx: TurnContext, user_text: str) -> AsyncIterator[dict[str, Any]]:
     """Persist the analyst's message, then drive the loop."""
-    message = await repo.add_message(ctx.db, ctx.conversation.id, "user", content=user_text)
+    message = await repo.add_message(
+        ctx.db,
+        ctx.conversation.id,
+        "user",
+        content=user_text,
+        # Stamped with whoever sent it, not the thread's creator: on a shared
+        # thread those are often different people.
+        author_session_id=ctx.session.id,
+    )
     await repo.touch_conversation(ctx.db, ctx.conversation)
     await ctx.db.commit()
     yield _event("user_message", id=str(message.id), seq=message.seq)

@@ -8,7 +8,7 @@ import uuid
 from collections.abc import AsyncIterator
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -50,7 +50,10 @@ async def _stream(
     async with SessionMaker() as db:
         session = await db.get(AnonSession, session_id)
         conversation = await db.get(Conversation, conversation_id)
-        if session is None or conversation is None or conversation.session_id != session_id:
+        # Access was decided by the endpoint, which knows whether the workspace
+        # is shared. Re-checking creator identity here would reject exactly the
+        # case sharing exists for: a second analyst adding to someone's thread.
+        if session is None or conversation is None:
             yield _sse({"type": "error", "message": "Conversation not found"})
             return
 
@@ -140,6 +143,15 @@ async def send_message(
 ) -> StreamingResponse:
     await owned_conversation(conversation_id, session, db)
     message_limiter.check(str(session.id))
+    # Shared threads mean two analysts can send into one conversation at the
+    # same moment. Both would compute the same next `seq` and one would lose
+    # the unique index; 409 with an explanation beats a 500.
+    if await repo.has_active_turn(db, conversation_id):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Another analyst is already asking in this conversation. Wait for "
+            "that answer to finish, or start a new chat.",
+        )
     return StreamingResponse(
         _stream(request, session.id, conversation_id, "message", payload.message),
         media_type="text/event-stream",

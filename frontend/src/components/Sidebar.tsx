@@ -147,7 +147,17 @@ export function Sidebar({
                 onClick={() => onSelect(conversation.id)}
               >
                 <IconChat size={16} className="conversation-icon" />
-                <span className="conversation-title">{conversation.title}</span>
+                <span className="conversation-column">
+                  <span className="conversation-title">{conversation.title}</span>
+                  {/* Only when it is someone else's: labelling your own
+                      threads with your own name is noise. */}
+                  {conversation.author_session_id &&
+                    conversation.author_session_id !== session.id && (
+                      <span className="conversation-author">
+                        {conversation.author_label ?? "another analyst"}
+                      </span>
+                    )}
+                </span>
                 {/* Cost, where an analyst can see it accumulating rather than
                     only after opening the thread. Hidden on hover so it does
                     not fight the archive button for the same space. */}
@@ -162,17 +172,20 @@ export function Sidebar({
                     {compact(conversation.total_tokens)}
                   </span>
                 )}
-                <button
-                  className="conversation-archive"
-                  title="Archive this conversation"
-                  aria-label="Archive this conversation"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onArchive(conversation.id);
-                  }}
-                >
-                  <IconTrash size={15} />
-                </button>
+                {(!conversation.author_session_id ||
+                  conversation.author_session_id === session.id) && (
+                  <button
+                    className="conversation-archive"
+                    title="Archive this conversation"
+                    aria-label="Archive this conversation"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onArchive(conversation.id);
+                    }}
+                  >
+                    <IconTrash size={15} />
+                  </button>
+                )}
               </div>
             ))}
           </div>

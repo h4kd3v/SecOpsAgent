@@ -127,6 +127,13 @@ class Message(Base):
         ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False
     )
     role: Mapped[str] = mapped_column(String(20), nullable=False)
+    # Who wrote this, when a thread is shared. Nullable: assistant and tool
+    # rows have no author, and rows predating the shared workspace have none
+    # either. SET NULL rather than CASCADE — losing a session must not delete
+    # the messages, they are the record.
+    author_session_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("anon_sessions.id", ondelete="SET NULL"), nullable=True
+    )
     # Nullable on purpose: an assistant turn that is purely tool calls has no text.
     content: Mapped[str | None] = mapped_column(Text, nullable=True)
     tool_calls: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
@@ -155,6 +162,8 @@ class Message(Base):
     __table_args__ = (
         CheckConstraint(f"role IN {MESSAGE_ROLES}", name="ck_messages_role"),
         Index("ix_messages_conversation_seq", "conversation_id", "seq", unique=True),
+        # "what did this analyst ask?" across a shared workspace.
+        Index("ix_messages_author", "author_session_id"),
     )
 
 

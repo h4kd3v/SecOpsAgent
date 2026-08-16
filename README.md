@@ -353,7 +353,7 @@ TEST_DATABASE_URL='postgresql+asyncpg://test:test@localhost:55433/test' \
     .venv/bin/pytest tests -q                  # + integration tests
 ```
 
-117 tests covering the things that actually bite:
+126 tests covering the things that actually bite:
 
 - **Streaming, through the real ASGI app over HTTP** — all 500 chunks of a long
   answer arrive (not just the first), content containing raw newlines, blank
@@ -415,11 +415,35 @@ name does not change if the directory is renamed.
 |---|---|---|
 | `anon_sessions` | browser | the label shown in the sidebar, user-agent, source IP, first and last seen. No name, no email, no password — there is no registration |
 | `conversations` | thread | title, owning session, archived flag, created/updated, and running token totals for the thread |
-| `messages` | turn | role, the analyst's prompt or the model's answer, the model's reasoning, the tool calls it asked for, why a turn failed, token usage, model id, ordering |
+| `messages` | turn | role, who wrote it, the analyst's prompt or the model's answer, the model's reasoning, the tool calls it asked for, why a turn failed, token usage, model id, ordering |
 | `tool_invocations` | MCP call | tool name, the exact arguments the model sent, the full result, error, status, whether it was a write, latency, and which session it belonged to |
 | `audit_events` | security event | tool executed, tool denied, approval requested, conversation archived, completion failed (with the raw provider payload), MCP unreachable, tools refreshed |
 | `mcp_tool_catalog` | MCP server | the cached tool definitions and when they were fetched |
 | `alembic_version` | database | which migration the schema is at |
+
+### One shared workspace
+
+`SHARED_WORKSPACE=true` (the default) puts every analyst in one workspace:
+every conversation appears in every sidebar, newest first, labelled with who
+started it. A shift working one incident together beats twenty private
+transcripts of the same investigation.
+
+The trade is explicit: **there is no privacy between analysts.** Anything typed
+into this app is visible to all twenty. Set `SHARED_WORKSPACE=false` for
+per-browser history instead — the isolation tests cover that mode too.
+
+Three rules make sharing safe rather than merely open:
+
+* **Reading and contributing are shared; removing is not.** Anyone can add to
+  any thread, but only the analyst who started one can rename or archive it.
+  One mis-click should not take somebody's investigation out of nineteen
+  sidebars.
+* **Every question keeps its asker.** `messages.author_session_id` records who
+  typed it, so a handover mid-thread stays legible.
+* **One turn at a time per thread.** Two analysts sending into the same
+  conversation at once would both claim the same position in the transcript;
+  the second gets a 409 telling them to wait or start a new chat, rather than
+  a 500.
 
 ### Prompts and tokens
 

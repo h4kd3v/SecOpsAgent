@@ -103,17 +103,25 @@ async def test_a_tool_result_from_another_thread_is_not_reachable(client):
     assert response.status_code == 404
 
 
-async def test_another_session_cannot_read_a_tool_result(client):
-    conversation_id, invocation_id, _ = await _thread_with_a_big_result(client)
+async def test_a_tool_result_follows_the_visibility_of_its_thread(client, monkeypatch):
+    """Tool output is part of a conversation, so it is exactly as visible as
+    the conversation is. With sharing off that means another analyst gets a
+    404, the same answer they get for the thread itself."""
+    from app.config import get_settings
 
+    conversation_id, invocation_id, _ = await _thread_with_a_big_result(client)
+    url = f"/api/conversations/{conversation_id}/invocations/{invocation_id}/result"
+
+    monkeypatch.setattr(get_settings(), "shared_workspace", False)
     transport = ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as intruder:
         await intruder.post("/api/session")
-        response = await intruder.get(
-            f"/api/conversations/{conversation_id}/invocations/{invocation_id}/result"
-        )
+        assert (await intruder.get(url)).status_code == 404
 
-    assert response.status_code == 404
+    monkeypatch.setattr(get_settings(), "shared_workspace", True)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as colleague:
+        await colleague.post("/api/session")
+        assert (await colleague.get(url)).status_code == 200
 
 
 def test_the_rate_limiter_does_not_grow_without_bound():

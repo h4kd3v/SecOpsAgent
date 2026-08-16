@@ -15,6 +15,9 @@ export interface Conversation {
   completion_tokens?: number;
   /** True if any turn's usage was approximated because the gateway omitted it. */
   usage_estimated?: boolean;
+  /** Who started the thread — shown when it was not you. */
+  author_session_id?: string | null;
+  author_label?: string | null;
 }
 
 export interface Invocation {
@@ -79,6 +82,8 @@ export interface Message {
   status: string;
   /** The model's working on the way to this answer, when the gateway streams it. */
   reasoning: string | null;
+  /** Who wrote this, on a shared thread. Null for assistant and tool rows. */
+  author_label?: string | null;
   /** Why this turn failed, if it did. Persisted, so it survives a reload. */
   error: string | null;
   seq: number;

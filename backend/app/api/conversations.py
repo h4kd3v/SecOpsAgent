@@ -40,10 +40,36 @@ async def app_config(_: AnonSession = Depends(current_session)) -> AppConfigOut:
 async def owned_conversation(
     conversation_id: uuid.UUID, session: AnonSession, db: AsyncSession
 ) -> Conversation:
+    """A thread this session may read and post to.
+
+    In a shared workspace that is any thread: the whole point is that an
+    investigation one analyst starts is visible and continuable by the shift.
+    With sharing off it is only their own, and the answer is 404 rather than
+    403 so a guessed id does not confirm the thread exists.
+    """
     conversation = await db.get(Conversation, conversation_id)
-    # 404 rather than 403 for another visitor's thread — don't confirm it exists.
-    if conversation is None or conversation.session_id != session.id:
+    if conversation is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Conversation not found")
+    if not settings.shared_workspace and conversation.session_id != session.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Conversation not found")
+    return conversation
+
+
+async def authored_conversation(
+    conversation_id: uuid.UUID, session: AnonSession, db: AsyncSession
+) -> Conversation:
+    """A thread this session may rename or archive.
+
+    Reading and contributing are shared; removing is not. One mis-click should
+    not take somebody else's investigation out of nineteen other sidebars.
+    """
+    conversation = await owned_conversation(conversation_id, session, db)
+    if conversation.session_id != session.id:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "This conversation belongs to another analyst. You can read and add "
+            "to it, but only the analyst who started it can rename or archive it.",
+        )
     return conversation
 
 
@@ -51,13 +77,29 @@ async def owned_conversation(
 async def list_conversations(
     session: AnonSession = Depends(current_session), db: AsyncSession = Depends(get_db)
 ) -> list[Conversation]:
-    result = await db.execute(
-        select(Conversation)
-        .where(Conversation.session_id == session.id, Conversation.archived.is_(False))
-        .order_by(Conversation.updated_at.desc())
-        .limit(200)
-    )
-    return list(result.scalars().all())
+    query = select(Conversation).where(Conversation.archived.is_(False))
+    if not settings.shared_workspace:
+        query = query.where(Conversation.session_id == session.id)
+    # Newest first: the thread someone just spoke in is the one the shift cares
+    # about. The UI groups by day and preserves this order inside each group.
+    result = await db.execute(query.order_by(Conversation.updated_at.desc()).limit(200))
+    conversations = list(result.scalars().all())
+    return await _with_authors(db, conversations)
+
+
+async def _with_authors(
+    db: AsyncSession, conversations: list[Conversation]
+) -> list[ConversationOut]:
+    """Attach who started each thread. One query, not one per row."""
+    labels = await repo.session_labels(db, {c.session_id for c in conversations})
+    return [_conversation_out(c, labels.get(c.session_id)) for c in conversations]
+
+
+def _conversation_out(conversation: Conversation, author: str | None) -> ConversationOut:
+    out = ConversationOut.model_validate(conversation, from_attributes=True)
+    out.author_session_id = conversation.session_id
+    out.author_label = author
+    return out
 
 
 @router.post("/conversations", response_model=ConversationOut, status_code=201)
@@ -81,9 +123,19 @@ async def get_conversation(
     conversation = await owned_conversation(conversation_id, session, db)
     messages = await repo.load_history(db, conversation.id)
     invocations = await repo.invocations_for(db, conversation.id)
+
+    # Who said what, for a thread several analysts may have contributed to.
+    authors = {m.author_session_id for m in messages if m.author_session_id}
+    labels = await repo.session_labels(db, authors | {conversation.session_id})
+
+    def as_out(message) -> MessageOut:
+        out = MessageOut.model_validate(message, from_attributes=True)
+        out.author_label = labels.get(message.author_session_id)
+        return out
+
     return ConversationDetail(
-        conversation=ConversationOut.model_validate(conversation, from_attributes=True),
-        messages=[MessageOut.model_validate(m, from_attributes=True) for m in messages],
+        conversation=_conversation_out(conversation, labels.get(conversation.session_id)),
+        messages=[as_out(m) for m in messages],
         invocations=[_invocation_out(i) for i in invocations],
         # The stored running total, not a sum over the rows just fetched: the
         # two are written in one transaction, and only one of them scales.
@@ -135,7 +187,7 @@ async def rename_conversation(
     session: AnonSession = Depends(current_session),
     db: AsyncSession = Depends(get_db),
 ) -> Conversation:
-    conversation = await owned_conversation(conversation_id, session, db)
+    conversation = await authored_conversation(conversation_id, session, db)
     conversation.title = payload.title
     await db.flush()
     await repo.notify_conversation(db, conversation, "conversation_updated")
@@ -149,7 +201,7 @@ async def archive_conversation(
     session: AnonSession = Depends(current_session),
     db: AsyncSession = Depends(get_db),
 ) -> None:
-    conversation = await owned_conversation(conversation_id, session, db)
+    conversation = await authored_conversation(conversation_id, session, db)
     # Archive, never DELETE: the tool invocations under this thread are an
     # audit record and outlive the analyst's interest in the chat.
     conversation.archived = True

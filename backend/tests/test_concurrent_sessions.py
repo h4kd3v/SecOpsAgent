@@ -165,9 +165,13 @@ async def test_twenty_analysts_never_see_each_others_turns(stack):
                 assert other not in text, f"{host}'s transcript contains {other}"
 
 
-async def test_each_analyst_only_ever_lists_their_own_conversations(stack):
-    """Twenty sidebars, built concurrently, must not borrow rows from
-    each other."""
+async def test_each_analyst_only_ever_lists_their_own_conversations(stack, monkeypatch):
+    """With the shared workspace off, twenty sidebars built concurrently must
+    not borrow rows from each other. (Sharing on is the opposite guarantee and
+    is covered in test_shared_workspace.py.)"""
+    from app.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "shared_workspace", False)
     hosts = [f"HOST-{i:02d}" for i in range(ANALYSTS)]
 
     async def sidebar_for(host: str) -> list[str]:
@@ -193,8 +197,12 @@ async def test_each_analyst_only_ever_lists_their_own_conversations(stack):
     assert len(set(flat)) == len(flat), "two analysts were shown the same conversation"
 
 
-async def test_a_conversation_is_invisible_to_another_session(stack):
-    """Guessing a UUID must not be enough: ownership is enforced per request."""
+async def test_a_conversation_is_invisible_to_another_session(stack, monkeypatch):
+    """With sharing off, guessing a UUID must not be enough: ownership is
+    enforced per request, on reads and on writes alike."""
+    from app.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "shared_workspace", False)
     (mine, my_conversation) = await _make_analyst("Analyst A")
     (theirs, _) = await _make_analyst("Analyst B")
 

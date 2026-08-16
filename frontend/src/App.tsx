@@ -156,6 +156,7 @@ export default function App() {
           totalTokens={chat.totalTokens}
           modelDisplayName={config?.model_display_name ?? ""}
           sessionInitials={initials}
+          sessionLabel={session.label}
           conversationId={activeId}
           onSend={send}
           onDecide={chat.decide}

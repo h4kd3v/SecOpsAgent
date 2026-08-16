@@ -208,8 +208,16 @@ async def test_every_tool_is_offered_but_writes_still_gate(db, monkeypatch):
     assert offered == [["search_udm", "close_case"]]
 
 
-async def test_sidebar_events_are_published_for_the_owning_session(db, monkeypatch):
-    """The sidebar updates in real time only if the loop actually notifies."""
+async def test_sidebar_events_are_published(db, monkeypatch):
+    """The sidebar updates in real time only if the loop actually notifies.
+
+    Who the event is addressed to depends on the workspace: shared means
+    everyone (`None`), because a thread one analyst starts has to appear in the
+    other nineteen sidebars and each is subscribed under their own id.
+    """
+    from app.config import get_settings
+
+    settings = get_settings()
     fake = FakeMcp([READ_TOOL])
     _use(monkeypatch, fake)
     stream, _ = scripted_llm([{"tokens": ["Nothing found."]}])
@@ -229,7 +237,8 @@ async def test_sidebar_events_are_published_for_the_owning_session(db, monkeypat
     [e async for e in run_turn(ctx, "check 1.2.3.4")]
 
     assert published, "no sidebar event was published"
-    assert {sid for sid, _ in published} == {ctx.session.id}
+    expected = None if settings.shared_workspace else ctx.session.id
+    assert {sid for sid, _ in published} == {expected}
     # The generated title has to reach the sidebar, or the thread stays
     # labelled "New conversation" until a manual refresh.
     assert "conversation_updated" in {kind for _, kind in published}

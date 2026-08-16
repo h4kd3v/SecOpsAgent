@@ -8,8 +8,11 @@ from datetime import timedelta
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import AuditEvent, Conversation, Message, ToolInvocation, utcnow
+from app.config import get_settings
+from app.db.models import AnonSession, AuditEvent, Conversation, Message, ToolInvocation, utcnow
 from app.services.events import event_bus
+
+settings = get_settings()
 
 
 # How much of a tool result travels with the transcript. Enough to see what
@@ -17,6 +20,11 @@ from app.services.events import event_bus
 # download. The full text is one request away, and the model always got it in
 # full at the time.
 RESULT_PREVIEW_CHARS = 2000
+
+# How long a `streaming` row is taken to mean "a turn is running here". Long
+# enough for a slow multi-round investigation, short enough that debris from a
+# killed worker does not wedge a thread for the rest of the day.
+ACTIVE_TURN_TIMEOUT_SECONDS = 300
 
 
 def result_text(invocation: ToolInvocation) -> str:
@@ -51,10 +59,12 @@ async def add_message(
     status: str = "complete",
     token_usage: dict[str, Any] | None = None,
     model: str | None = None,
+    author_session_id: uuid.UUID | None = None,
 ) -> Message:
     message = Message(
         conversation_id=conversation_id,
         role=role,
+        author_session_id=author_session_id,
         content=content,
         tool_calls=tool_calls,
         tool_call_id=tool_call_id,
@@ -146,10 +156,15 @@ async def touch_conversation(
 async def notify_conversation(
     db: AsyncSession, conversation: Conversation, event_type: str
 ) -> None:
-    """Push a sidebar update to every tab this visitor has open."""
+    """Push a sidebar update.
+
+    To everyone when the workspace is shared — a thread one analyst starts has
+    to show up in the other nineteen sidebars, and each of them is subscribed
+    under their own session id. Otherwise only to the tabs of the owner.
+    """
     await event_bus.publish(
         db,
-        conversation.session_id,
+        None if settings.shared_workspace else conversation.session_id,
         {
             "type": event_type,
             "conversation": {
@@ -162,6 +177,41 @@ async def notify_conversation(
             },
         },
     )
+
+
+async def has_active_turn(db: AsyncSession, conversation_id: uuid.UUID) -> bool:
+    """Is a turn already running in this thread?
+
+    Two analysts sending into one shared thread at the same moment would both
+    compute the same next `seq` and one would lose the unique index — a 500
+    where the honest answer is "someone else is asking, wait a moment".
+
+    Keyed off the streaming row the turn already writes, so there is no second
+    piece of state to keep in sync. A row left behind by a killed worker stops
+    blocking once it ages out; the ordinary path clears it within milliseconds
+    by settling the turn.
+    """
+    cutoff = utcnow() - timedelta(seconds=ACTIVE_TURN_TIMEOUT_SECONDS)
+    result = await db.execute(
+        select(Message.id)
+        .where(
+            Message.conversation_id == conversation_id,
+            Message.status == "streaming",
+            Message.created_at > cutoff,
+        )
+        .limit(1)
+    )
+    return result.scalar_one_or_none() is not None
+
+
+async def session_labels(db: AsyncSession, ids: set[uuid.UUID]) -> dict[uuid.UUID, str]:
+    """Author labels for a set of sessions, in one query."""
+    if not ids:
+        return {}
+    result = await db.execute(
+        select(AnonSession.id, AnonSession.label).where(AnonSession.id.in_(ids))
+    )
+    return {row[0]: row[1] for row in result.all()}
 
 
 async def pending_invocations(

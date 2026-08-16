@@ -230,6 +230,7 @@ export function useChatStream(
         tool_call_id: null,
         status: "complete",
         reasoning: null,
+        author_label: null,
         error: null,
         seq: Number.MAX_SAFE_INTEGER,
         created_at: new Date().toISOString(),

@@ -24,6 +24,10 @@ class ConversationOut(BaseModel):
     completion_tokens: int = 0
     total_tokens: int = 0
     usage_estimated: bool = False
+    # Who started the thread. Meaningful only in a shared workspace, where the
+    # sidebar shows other analysts' investigations alongside your own.
+    author_session_id: uuid.UUID | None = None
+    author_label: str | None = None
 
 
 class RenameRequest(BaseModel):
@@ -57,6 +61,8 @@ class MessageOut(BaseModel):
     # The model's working, when the gateway streams it. Separate from content
     # so the UI can present it as working rather than as the answer.
     reasoning: str | None = None
+    # Who wrote this, on shared threads. Null for assistant and tool rows.
+    author_label: str | None = None
     # Why this turn failed, if it did. Kept out of `content` so the UI can
     # style it as a failure rather than as something the model said.
     error: str | None = None

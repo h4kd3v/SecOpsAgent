@@ -47,17 +47,30 @@ class EventBus:
 
     # -- publishing ---------------------------------------------------------
 
-    async def publish(self, db: AsyncSession, session_id: uuid.UUID, event: dict[str, Any]) -> None:
+    async def publish(
+        self,
+        db: AsyncSession,
+        session_id: uuid.UUID | None,
+        event: dict[str, Any],
+    ) -> None:
         """Fire an event to every listener, in this process or another.
 
         Called inside the caller's transaction: the notification is delivered
         on COMMIT, so a client can never be told about a row that later rolls
         back.
         """
-        payload = json.dumps({"session_id": str(session_id), **event}, default=str)
+        # session_id None means everyone: in a shared workspace a thread that
+        # appears for one analyst has to appear for all of them, and they are
+        # each subscribed under their own id.
+        payload = json.dumps(
+            {"session_id": str(session_id) if session_id else "*", **event}, default=str
+        )
         if len(payload) > 7000:  # leave headroom under Postgres' 8000-byte cap
             payload = json.dumps(
-                {"session_id": str(session_id), "type": event.get("type", "refresh")}
+                {
+                    "session_id": str(session_id) if session_id else "*",
+                    "type": event.get("type", "refresh"),
+                }
             )
         await db.execute(
             text("SELECT pg_notify(:channel, :payload)"),
@@ -82,12 +95,18 @@ class EventBus:
     def _dispatch(self, _conn, _pid, _channel, payload: str) -> None:
         try:
             event = json.loads(payload)
-            session_id = uuid.UUID(event.pop("session_id"))
+            target = event.pop("session_id")
+            session_id = None if target == "*" else uuid.UUID(target)
         except (ValueError, KeyError, TypeError):
             logger.warning("dropping malformed notify payload")
             return
 
-        for queue in self._subscribers.get(session_id, set()):
+        if session_id is None:
+            queues = [q for queues in self._subscribers.values() for q in queues]
+        else:
+            queues = list(self._subscribers.get(session_id, set()))
+
+        for queue in queues:
             try:
                 queue.put_nowait(event)
             except asyncio.QueueFull:

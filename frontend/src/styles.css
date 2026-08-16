@@ -240,7 +240,7 @@ body {
 }
 .conversation:hover .conversation-tokens { display: none; }
 
-.conversation-archive {
+.conversation-action {
   display: grid;
   place-items: center;
   background: none;
@@ -250,9 +250,47 @@ body {
   opacity: 0;
   padding: 2px;
   border-radius: 6px;
+  flex-shrink: 0;
 }
-.conversation:hover .conversation-archive { opacity: 0.65; }
-.conversation-archive:hover { opacity: 1 !important; color: var(--danger); }
+.conversation:hover .conversation-action { opacity: 0.55; }
+.conversation-action:hover { opacity: 1 !important; color: var(--accent); }
+.conversation-action:last-child:hover { color: var(--danger); }
+.conversation-icon.pinned { color: var(--accent); opacity: 1; }
+
+.rename-input {
+  width: 100%;
+  padding: 1px 4px;
+  border: 1px solid var(--accent);
+  border-radius: 5px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.89rem;
+  outline: none;
+}
+
+.conversation-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin-top: 3px;
+}
+.tag-chip {
+  font-size: 0.64rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.vote-count { font-size: 0.72rem; font-variant-numeric: tabular-nums; }
+.turn-action.voted { color: var(--ok); background: var(--ok-soft); }
+.turn-action.voted.down { color: var(--danger); background: var(--danger-soft); }
+
+.usage-cost { font-variant-numeric: tabular-nums; }
 
 .conversation.draft { cursor: default; }
 .draft-hint {

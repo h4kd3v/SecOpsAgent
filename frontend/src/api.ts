@@ -48,6 +48,27 @@ export const api = {
       `/api/conversations/${conversationId}/invocations/${invocationId}/result`,
     ),
 
+  updateConversation: (
+    id: string,
+    changes: { title?: string; pinned?: boolean; tags?: string[] },
+  ) =>
+    request<Conversation>(`/api/conversations/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(changes),
+    }),
+
+  rateMessage: (
+    conversationId: string,
+    messageId: string,
+    rating: "up" | "down" | null,
+  ) =>
+    request<{ up: number; down: number; mine: "up" | "down" | null }>(
+      `/api/conversations/${conversationId}/messages/${messageId}/feedback`,
+      rating === null
+        ? { method: "DELETE" }
+        : { method: "PUT", body: JSON.stringify({ rating }) },
+    ),
+
   archiveConversation: (id: string) =>
     request<void>(`/api/conversations/${id}`, { method: "DELETE" }),
 };

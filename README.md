@@ -353,7 +353,7 @@ TEST_DATABASE_URL='postgresql+asyncpg://test:test@localhost:55433/test' \
     .venv/bin/pytest tests -q                  # + integration tests
 ```
 
-126 tests covering the things that actually bite:
+144 tests covering the things that actually bite:
 
 - **Streaming, through the real ASGI app over HTTP** — all 500 chunks of a long
   answer arrive (not just the first), content containing raw newlines, blank
@@ -414,10 +414,11 @@ name does not change if the directory is renamed.
 | Table | One row per | Holds |
 |---|---|---|
 | `anon_sessions` | browser | the label shown in the sidebar, user-agent, source IP, first and last seen. No name, no email, no password — there is no registration |
-| `conversations` | thread | title, owning session, archived flag, created/updated, and running token totals for the thread |
+| `conversations` | thread | title, owning session, archived flag, created/updated, running token and cost totals, pinned flag, tags |
 | `messages` | turn | role, who wrote it, the analyst's prompt or the model's answer, the model's reasoning, the tool calls it asked for, why a turn failed, token usage, model id, ordering |
 | `tool_invocations` | MCP call | tool name, the exact arguments the model sent, the full result, error, status, whether it was a write, latency, and which session it belonged to |
 | `audit_events` | security event | tool executed, tool denied, approval requested, conversation archived, completion failed (with the raw provider payload), MCP unreachable, tools refreshed |
+| `message_feedback` | analyst, per answer | thumbs up or down and an optional note — one vote each, changeable |
 | `mcp_tool_catalog` | MCP server | the cached tool definitions and when they were fetched |
 | `alembic_version` | database | which migration the schema is at |
 
@@ -459,6 +460,36 @@ Tokens are recorded twice, on purpose:
 * **Per thread**, in `conversations.prompt_tokens / completion_tokens /
   total_tokens`, folded in as each turn commits — the same transaction as the
   message it counts, so the two cannot drift.
+
+### Cost
+
+With `LLM_MODEL_PRICING` set — `gpt-4.1=2.00/8.00,claude-opus-5=5.00/25.00`,
+in dollars per million tokens — each turn records what it cost, and the rate it
+was charged at:
+
+```json
+{"prompt_tokens": 1840, "completion_tokens": 96,
+ "input_rate_per_1m": 5.00, "output_rate_per_1m": 25.00}
+```
+
+Storing the rate is the point. Published prices change, and a cost recomputed
+later from today's prices is not what was actually spent. A model with no
+configured rate records no cost rather than a wrong one — a gap an operator can
+see and fill beats a plausible number that is wrong. Versioned ids resolve to
+their family (`gpt-4.1-2025-04-14` is billed at `gpt-4.1` rates), longest
+prefix winning, so `gpt-4.1-mini` is never billed as `gpt-4.1`.
+
+### Titles, pins and tags
+
+A thread is named from its first prompt as that message is written — not from a
+model call after the turn, which is why every thread whose first turn failed
+used to stay "New conversation" for good. Any analyst can rename one, and the
+new name is stored and broadcast to the other sidebars.
+
+Pinned threads sort above the date groups; twenty analysts sharing one sidebar
+bury the good investigations within a week. Tags are free-form labels, trimmed
+and de-duplicated on write — an incident number is just a tag by convention
+(`INC-4471`), which keeps one mechanism instead of two.
 
 The rollup exists because the per-turn rows answer "what did this thread
 cost?" but not "what did this analyst cost last month?" without reading every

@@ -18,6 +18,10 @@ export interface Conversation {
   /** Who started the thread — shown when it was not you. */
   author_session_id?: string | null;
   author_label?: string | null;
+  /** Money, at the rates in force when each turn ran. Serialised as a string. */
+  cost_usd?: string;
+  pinned?: boolean;
+  tags?: string[];
 }
 
 export interface Invocation {
@@ -89,7 +93,13 @@ export interface Message {
   seq: number;
   created_at: string;
   token_usage: TokenUsage | null;
+  /** What this turn cost, or null when the model has no configured rate. */
+  cost_usd?: string | null;
   model: string | null;
+  /** How the shift rated this answer, and whether you were part of it. */
+  feedback_up?: number;
+  feedback_down?: number;
+  my_feedback?: "up" | "down" | null;
 }
 
 /** Mirrors the `type` field of every SSE frame the agent loop emits. */

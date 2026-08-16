@@ -270,7 +270,6 @@ async def test_closing_the_stream_repairs_the_transcript(db, monkeypatch):
 
     monkeypatch.setattr(loop_module, "mcp_manager", FakeMcp())
     monkeypatch.setattr(catalog_module, "mcp_manager", FakeMcp())
-    monkeypatch.setattr(llm, "generate_title", lambda *a: _fake_title())
 
     stalled = asyncio.Event()
 
@@ -328,7 +327,6 @@ async def test_cancelling_settles_an_unanswered_tool_call(db, monkeypatch):
 
     monkeypatch.setattr(loop_module, "mcp_manager", HangingMcp())
     monkeypatch.setattr(catalog_module, "mcp_manager", HangingMcp())
-    monkeypatch.setattr(llm, "generate_title", lambda *a: _fake_title())
 
     async def asks_for_a_tool(messages, tools, on_token, on_reasoning=None, on_tool_delta=None):
         result = llm.StreamedTurn()

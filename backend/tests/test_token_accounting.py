@@ -54,7 +54,6 @@ def wired(monkeypatch):
 
     monkeypatch.setattr(agent_loop, "mcp_manager", FakeMcp())
     monkeypatch.setattr(catalog_module, "mcp_manager", FakeMcp())
-    monkeypatch.setattr(llm, "generate_title", lambda *a: _title())
 
 
 async def _title() -> str:

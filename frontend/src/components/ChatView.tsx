@@ -12,6 +12,7 @@ import {
   IconSparkle,
   IconStop,
 } from "./Icons";
+import { FeedbackButtons } from "./FeedbackButtons";
 import { PendingToolCard } from "./PendingToolCard";
 import { ReasoningBlock } from "./ReasoningBlock";
 import { PromptCards, PromptChips } from "./SuggestedPrompts";
@@ -167,6 +168,10 @@ export function ChatView(props: Props) {
                     >
                       {copied === message.id ? <IconCheck size={15} /> : <IconCopy size={15} />}
                     </button>
+                    <FeedbackButtons
+                      conversationId={props.conversationId}
+                      message={message}
+                    />
                     {message.id === lastId && lastUserPrompt && (
                       <button
                         className="turn-action labelled"
@@ -182,6 +187,7 @@ export function ChatView(props: Props) {
                   <UsageFooter
                     model={message.model}
                     usage={message.token_usage}
+                    cost={message.cost_usd}
                     displayNameOverride={props.modelDisplayName}
                   />
                 </div>

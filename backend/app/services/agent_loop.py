@@ -28,7 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.db.models import AnonSession, Conversation, Message, ToolInvocation
 from app.db.session import SessionMaker
-from app.services import llm, repository as repo
+from app.services import llm, pricing, repository as repo
 from app.services.mcp_manager import McpUnavailable, ToolSpec, mcp_manager
 from app.services.tool_catalog import tool_catalog
 from app.services.tool_policy import requires_approval
@@ -83,9 +83,14 @@ async def run_turn(ctx: TurnContext, user_text: str) -> AsyncIterator[dict[str, 
         # thread those are often different people.
         author_session_id=ctx.session.id,
     )
+    # Named now, from the prompt, so the sidebar row is meaningful the instant
+    # it appears — and stays meaningful even if this turn fails.
+    titled = repo.title_conversation(ctx.conversation, user_text)
     await repo.touch_conversation(ctx.db, ctx.conversation)
     await ctx.db.commit()
     yield _event("user_message", id=str(message.id), seq=message.seq)
+    if titled:
+        yield _event("title", title=ctx.conversation.title)
 
     async for event in _drive(ctx):
         yield event
@@ -293,7 +298,7 @@ async def _drive(ctx: TurnContext) -> AsyncIterator[dict[str, Any]]:
                 },
             )
             await ctx.db.commit()
-            async for event in _maybe_title(ctx, "", allow_model=False):
+            async for event in _maybe_title(ctx):
                 yield event
             yield _event("error", message=explanation, id=str(assistant.id))
             return
@@ -320,7 +325,9 @@ async def _drive(ctx: TurnContext) -> AsyncIterator[dict[str, Any]]:
         )
         # Same transaction as the message, so the thread total and the rows it
         # sums can never disagree.
-        repo.add_usage(ctx.conversation, assistant.token_usage)
+        assistant.token_usage = pricing.stamp_rates(assistant.model, assistant.token_usage)
+        assistant.cost_usd = pricing.cost_for(assistant.model, assistant.token_usage)
+        repo.add_usage(ctx.conversation, assistant.token_usage, assistant.cost_usd)
         await repo.touch_conversation(ctx.db, ctx.conversation)
         await ctx.db.commit()
 
@@ -338,7 +345,7 @@ async def _drive(ctx: TurnContext) -> AsyncIterator[dict[str, Any]]:
             )
 
         if not turn.tool_calls:
-            async for event in _maybe_title(ctx, turn.content):
+            async for event in _maybe_title(ctx):
                 yield event
             yield _event(
                 "done",
@@ -412,7 +419,7 @@ async def _drive(ctx: TurnContext) -> AsyncIterator[dict[str, Any]]:
     # Recorded, not just announced: an analyst reopening this thread would
     # otherwise find their question, a pile of tool calls, and no explanation.
     await repo.record_error(ctx.db, ctx.conversation.id, exhausted, model=settings.llm_model_name)
-    async for event in _maybe_title(ctx, "", allow_model=False):
+    async for event in _maybe_title(ctx):
         yield event
     yield _event("error", message=exhausted)
 
@@ -556,29 +563,21 @@ async def _checkpoint(message_id: uuid.UUID, text: str, reasoning: str = "") -> 
     await asyncio.shield(asyncio.ensure_future(write()))
 
 
-async def _maybe_title(
-    ctx: TurnContext, reply: str, *, allow_model: bool = True
-) -> AsyncIterator[dict[str, Any]]:
+async def _maybe_title(ctx: TurnContext) -> AsyncIterator[dict[str, Any]]:
+    """Name a thread that somehow reached an answer without a title.
+
+    A safety net, not the normal path: `run_turn` titles from the prompt as the
+    first message is written. There is no model call here — the analyst's own
+    words describe the investigation better than a rephrasing, and a billed
+    request per conversation to produce one was not worth its latency.
+    """
     if ctx.conversation.title != "New conversation":
         return
     history = await repo.load_history(ctx.db, ctx.conversation.id)
     first_user = next((m.content for m in history if m.role == "user" and m.content), "")
-    if not first_user:
+    if not first_user or not repo.title_conversation(ctx.conversation, first_user):
         return
-
-    # A thread stuck at "New conversation" is one an analyst cannot find again,
-    # which matters most for the turns that went wrong — those are the ones
-    # they come back to. So a failed turn still gets a title, taken from the
-    # prompt rather than from a model that has just proved unavailable.
-    title = ""
-    if allow_model:
-        try:
-            title = await llm.generate_title(first_user, reply or "")
-        except Exception:  # noqa: BLE001
-            logger.warning("title generation failed; using the prompt", exc_info=True)
-    title = title or repo.title_from_prompt(first_user)
-    ctx.conversation.title = title
-    # Push the new title to the sidebar in every tab this visitor has open.
+    # Push the new title to the sidebar in every tab.
     await repo.notify_conversation(ctx.db, ctx.conversation, "conversation_updated")
     await ctx.db.commit()
-    yield _event("title", title=title)
+    yield _event("title", title=ctx.conversation.title)

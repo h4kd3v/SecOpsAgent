@@ -110,7 +110,6 @@ async def test_read_tool_runs_without_approval(db, monkeypatch):
         ]
     )
     monkeypatch.setattr(llm, "stream_completion", stream)
-    monkeypatch.setattr(llm, "generate_title", lambda *a: _title())
 
     ctx = await make_context(db)
     events = [e async for e in run_turn(ctx, "Any traffic from 1.2.3.4?")]
@@ -135,7 +134,6 @@ async def test_write_tool_parks_until_approved(db, monkeypatch):
         ]
     )
     monkeypatch.setattr(llm, "stream_completion", stream)
-    monkeypatch.setattr(llm, "generate_title", lambda *a: _title())
 
     ctx = await make_context(db)
     events = [e async for e in run_turn(ctx, "Close case 7")]
@@ -165,7 +163,6 @@ async def test_denied_write_is_recorded_and_not_executed(db, monkeypatch):
         ]
     )
     monkeypatch.setattr(llm, "stream_completion", stream)
-    monkeypatch.setattr(llm, "generate_title", lambda *a: _title())
 
     ctx = await make_context(db)
     events = [e async for e in run_turn(ctx, "Close case 7")]
@@ -200,7 +197,6 @@ async def test_every_tool_is_offered_but_writes_still_gate(db, monkeypatch):
         return result
 
     monkeypatch.setattr(llm, "stream_completion", capture)
-    monkeypatch.setattr(llm, "generate_title", lambda *a: _title())
 
     ctx = await make_context(db)
     [e async for e in run_turn(ctx, "hello")]
@@ -222,7 +218,6 @@ async def test_sidebar_events_are_published(db, monkeypatch):
     _use(monkeypatch, fake)
     stream, _ = scripted_llm([{"tokens": ["Nothing found."]}])
     monkeypatch.setattr(llm, "stream_completion", stream)
-    monkeypatch.setattr(llm, "generate_title", lambda *a: _title())
 
     published: list[tuple] = []
 
@@ -254,7 +249,6 @@ async def test_unknown_tool_is_answered_not_crashed(db, monkeypatch):
         ]
     )
     monkeypatch.setattr(llm, "stream_completion", stream)
-    monkeypatch.setattr(llm, "generate_title", lambda *a: _title())
 
     ctx = await make_context(db)
     events = [e async for e in run_turn(ctx, "do something impossible")]

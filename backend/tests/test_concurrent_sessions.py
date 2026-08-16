@@ -68,7 +68,6 @@ async def stack(monkeypatch):
     shared = SharedMcp()
     monkeypatch.setattr(agent_loop, "mcp_manager", shared)
     monkeypatch.setattr(catalog_module, "mcp_manager", shared)
-    monkeypatch.setattr(llm, "generate_title", lambda *a: _title())
 
     # Every analyst asks about their own host and gets their own answer, so a
     # crossed wire shows up as the wrong string rather than a subtle mismatch.

@@ -1,6 +1,14 @@
 import { useMemo, useState } from "react";
 import type { Conversation, Session } from "../types";
-import { IconChat, IconPlus, IconSearch, IconSettings, IconTrash } from "./Icons";
+import {
+  IconChat,
+  IconPencil,
+  IconPin,
+  IconPlus,
+  IconSearch,
+  IconSettings,
+  IconTrash,
+} from "./Icons";
 
 interface Props {
   conversations: Conversation[];
@@ -10,6 +18,7 @@ interface Props {
   onSelect: (id: string) => void;
   onNew: () => void;
   onArchive: (id: string) => void;
+  onUpdate: (id: string, changes: { title?: string; pinned?: boolean; tags?: string[] }) => void;
   onOpenSettings: () => void;
 }
 
@@ -35,7 +44,14 @@ function compact(tokens: number): string {
   return `${(tokens / 1_000_000).toFixed(1)}M`;
 }
 
-const BUCKET_ORDER = ["Today", "Yesterday", "Last 7 days", "Last 30 days", "Older"];
+const BUCKET_ORDER = [
+  "Pinned",
+  "Today",
+  "Yesterday",
+  "Last 7 days",
+  "Last 30 days",
+  "Older",
+];
 
 export function Sidebar({
   conversations,
@@ -45,10 +61,13 @@ export function Sidebar({
   onSelect,
   onNew,
   onArchive,
+  onUpdate,
   onOpenSettings,
 }: Props) {
   const [query, setQuery] = useState("");
   const [searching, setSearching] = useState(false);
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [draftTitle, setDraftTitle] = useState("");
 
   const groups = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -58,7 +77,9 @@ export function Sidebar({
 
     const byBucket = new Map<string, Conversation[]>();
     for (const conversation of matched) {
-      const bucket = bucketOf(conversation.updated_at);
+      // Pinned threads leave the timeline entirely: keeping them to hand is
+      // the whole point, and a pin that still sorted by date would not.
+      const bucket = conversation.pinned ? "Pinned" : bucketOf(conversation.updated_at);
       const list = byBucket.get(bucket);
       if (list) list.push(conversation);
       else byBucket.set(bucket, [conversation]);
@@ -67,6 +88,15 @@ export function Sidebar({
       (b) => [b, byBucket.get(b)!] as const,
     );
   }, [conversations, query]);
+
+  const commitRename = (conversation: Conversation) => {
+    const title = draftTitle.trim();
+    setRenaming(null);
+    // An empty box means "I changed my mind", not "call this nothing".
+    if (title && title !== conversation.title) {
+      onUpdate(conversation.id, { title });
+    }
+  };
 
   const initials = session.label
     .split(/\s+/)
@@ -146,9 +176,28 @@ export function Sidebar({
                 className={`conversation ${conversation.id === activeId ? "active" : ""}`}
                 onClick={() => onSelect(conversation.id)}
               >
-                <IconChat size={16} className="conversation-icon" />
+                {conversation.pinned ? (
+                  <IconPin size={16} className="conversation-icon pinned" />
+                ) : (
+                  <IconChat size={16} className="conversation-icon" />
+                )}
                 <span className="conversation-column">
-                  <span className="conversation-title">{conversation.title}</span>
+                  {renaming === conversation.id ? (
+                    <input
+                      className="rename-input"
+                      autoFocus
+                      value={draftTitle}
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={(e) => setDraftTitle(e.target.value)}
+                      onBlur={() => commitRename(conversation)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") commitRename(conversation);
+                        if (e.key === "Escape") setRenaming(null);
+                      }}
+                    />
+                  ) : (
+                    <span className="conversation-title">{conversation.title}</span>
+                  )}
                   {/* Only when it is someone else's: labelling your own
                       threads with your own name is noise. */}
                   {conversation.author_session_id &&
@@ -157,6 +206,15 @@ export function Sidebar({
                         {conversation.author_label ?? "another analyst"}
                       </span>
                     )}
+                  {!!conversation.tags?.length && (
+                    <span className="conversation-tags">
+                      {conversation.tags.map((tag) => (
+                        <span key={tag} className="tag-chip">
+                          {tag}
+                        </span>
+                      ))}
+                    </span>
+                  )}
                 </span>
                 {/* Cost, where an analyst can see it accumulating rather than
                     only after opening the thread. Hidden on hover so it does
@@ -172,10 +230,33 @@ export function Sidebar({
                     {compact(conversation.total_tokens)}
                   </span>
                 )}
+                <button
+                  className="conversation-action"
+                  title={conversation.pinned ? "Unpin" : "Pin to the top"}
+                  aria-label={conversation.pinned ? "Unpin" : "Pin to the top"}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onUpdate(conversation.id, { pinned: !conversation.pinned });
+                  }}
+                >
+                  <IconPin size={14} />
+                </button>
+                <button
+                  className="conversation-action"
+                  title="Rename"
+                  aria-label="Rename"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setDraftTitle(conversation.title);
+                    setRenaming(conversation.id);
+                  }}
+                >
+                  <IconPencil size={14} />
+                </button>
                 {(!conversation.author_session_id ||
                   conversation.author_session_id === session.id) && (
                   <button
-                    className="conversation-archive"
+                    className="conversation-action"
                     title="Archive this conversation"
                     aria-label="Archive this conversation"
                     onClick={(e) => {

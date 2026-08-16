@@ -208,10 +208,6 @@ async def stream_completion(
     return turn
 
 
-async def generate_title(first_user_message: str, _first_reply: str) -> str:
-    words = first_user_message.split()[:6]
-    return " ".join(words).strip("?.,")[:60] or "Demo investigation"
-
 
 def install() -> None:
     """Swap the two external services out, in place.
@@ -225,7 +221,6 @@ def install() -> None:
     from app.services import mcp_manager as mcp_module
 
     llm.stream_completion = stream_completion  # type: ignore[assignment]
-    llm.generate_title = generate_title  # type: ignore[assignment]
 
     fake = DemoMcpManager()
     mcp_module.mcp_manager = fake  # type: ignore[assignment]

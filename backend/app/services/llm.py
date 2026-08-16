@@ -227,31 +227,6 @@ async def stream_completion(
     return turn
 
 
-async def generate_title(first_user_message: str, first_reply: str) -> str:
-    """One cheap call to name the thread, ChatGPT-sidebar style."""
-    try:
-        response = await get_client().chat.completions.create(
-            model=settings.title_model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "Write a 3-6 word title for this security investigation. "
-                        "No quotes, no trailing period."
-                    ),
-                },
-                {"role": "user", "content": f"{first_user_message}\n\n{first_reply[:600]}"},
-            ],
-            max_tokens=24,
-            temperature=0.2,
-        )
-        title = (response.choices[0].message.content or "").strip().strip('"')
-        return title[:120] or "New conversation"
-    except Exception:  # noqa: BLE001 - a title is never worth failing a turn over
-        logger.warning("title generation failed", exc_info=True)
-        return "New conversation"
-
-
 async def ping() -> bool:
     try:
         await get_client().models.list()

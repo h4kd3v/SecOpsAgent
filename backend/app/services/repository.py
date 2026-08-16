@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from decimal import Decimal
 from typing import Any
 
 from datetime import timedelta
@@ -9,7 +10,15 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.db.models import AnonSession, AuditEvent, Conversation, Message, ToolInvocation, utcnow
+from app.db.models import (
+    AnonSession,
+    AuditEvent,
+    Conversation,
+    Message,
+    MessageFeedback,
+    ToolInvocation,
+    utcnow,
+)
 from app.services.events import event_bus
 
 settings = get_settings()
@@ -123,7 +132,32 @@ def to_wire(messages: list[Message]) -> list[dict[str, Any]]:
     return [m for m in wire if m["role"] != "tool" or m.get("tool_call_id") in asked]
 
 
-def add_usage(conversation: Conversation, usage: dict[str, Any] | None) -> None:
+def title_conversation(conversation: Conversation, prompt: str) -> bool:
+    """Name a thread after the question that started it.
+
+    Done when the first message is written, not when the turn ends. Titling
+    used to run after a successful completion, so every thread whose first turn
+    failed stayed "New conversation" for good — which is every thread in a
+    database whose gateway was out of quota.
+
+    No model call: the first line of the prompt is what the analyst went
+    looking for, and a billed request per conversation to rephrase it is not
+    worth the latency or the money.
+    """
+    if conversation.title != "New conversation":
+        return False
+    title = title_from_prompt(prompt)
+    if not title or title == "New conversation":
+        return False
+    conversation.title = title
+    return True
+
+
+def add_usage(
+    conversation: Conversation,
+    usage: dict[str, Any] | None,
+    cost: Decimal | None = None,
+) -> None:
     """Fold one turn's usage into the thread's running totals.
 
     Synchronous and in-memory on purpose: the caller commits it alongside the
@@ -139,6 +173,8 @@ def add_usage(conversation: Conversation, usage: dict[str, Any] | None) -> None:
     conversation.total_tokens += int(usage.get("total_tokens") or 0)
     if usage.get("estimated"):
         conversation.usage_estimated = True
+    if cost is not None:
+        conversation.cost_usd = (conversation.cost_usd or Decimal("0")) + cost
 
 
 async def touch_conversation(
@@ -174,6 +210,9 @@ async def notify_conversation(
                 "updated_at": conversation.updated_at,
                 "total_tokens": conversation.total_tokens,
                 "usage_estimated": conversation.usage_estimated,
+                "cost_usd": str(conversation.cost_usd or 0),
+                "pinned": conversation.pinned,
+                "tags": conversation.tags or [],
             },
         },
     )
@@ -202,6 +241,66 @@ async def has_active_turn(db: AsyncSession, conversation_id: uuid.UUID) -> bool:
         .limit(1)
     )
     return result.scalar_one_or_none() is not None
+
+
+async def feedback_for(
+    db: AsyncSession, conversation_id: uuid.UUID, viewer_id: uuid.UUID
+) -> dict[uuid.UUID, dict[str, Any]]:
+    """Per-message tallies, plus this analyst's own vote.
+
+    One query for the whole thread rather than one per answer: a long
+    investigation has dozens of turns and the sidebar opens it on every click.
+    """
+    result = await db.execute(
+        select(MessageFeedback)
+        .join(Message, Message.id == MessageFeedback.message_id)
+        .where(Message.conversation_id == conversation_id)
+    )
+    tallies: dict[uuid.UUID, dict[str, Any]] = {}
+    for row in result.scalars():
+        entry = tallies.setdefault(row.message_id, {"up": 0, "down": 0, "mine": None})
+        entry[row.rating] = entry.get(row.rating, 0) + 1
+        if row.session_id == viewer_id:
+            entry["mine"] = row.rating
+    return tallies
+
+
+async def set_feedback(
+    db: AsyncSession,
+    message_id: uuid.UUID,
+    session_id: uuid.UUID,
+    rating: str,
+    note: str | None = None,
+) -> None:
+    """Record or change one analyst's vote on one answer."""
+    result = await db.execute(
+        select(MessageFeedback).where(
+            MessageFeedback.message_id == message_id,
+            MessageFeedback.session_id == session_id,
+        )
+    )
+    existing = result.scalar_one_or_none()
+    if existing is None:
+        db.add(
+            MessageFeedback(
+                message_id=message_id, session_id=session_id, rating=rating, note=note
+            )
+        )
+    else:
+        existing.rating = rating
+        # An empty note on a re-vote means "no comment", not "keep the old one".
+        existing.note = note
+
+
+async def clear_feedback(
+    db: AsyncSession, message_id: uuid.UUID, session_id: uuid.UUID
+) -> None:
+    await db.execute(
+        delete(MessageFeedback).where(
+            MessageFeedback.message_id == message_id,
+            MessageFeedback.session_id == session_id,
+        )
+    )
 
 
 async def session_labels(db: AsyncSession, ids: set[uuid.UUID]) -> dict[uuid.UUID, str]:

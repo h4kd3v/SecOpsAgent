@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
@@ -10,8 +11,10 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -47,6 +50,7 @@ def _created() -> Mapped[datetime]:
 
 # Roles follow the OpenAI chat schema so rows map 1:1 onto the wire format.
 MESSAGE_ROLES = ("system", "user", "assistant", "tool")
+FEEDBACK_RATINGS = ("up", "down")
 INVOCATION_STATUSES = (
     "pending_approval",
     "denied",
@@ -103,6 +107,17 @@ class Conversation(Base):
     # True once any turn in the thread had its usage approximated because the
     # gateway omitted it. Marks the total as a floor, not a measurement.
     usage_estimated: Mapped[bool] = mapped_column(nullable=False, default=False)
+    # Money, accumulated the same way and for the same reason as the tokens.
+    # Null-free: a thread whose model has no configured rate simply stays at 0.
+    cost_usd: Mapped[Decimal] = mapped_column(
+        Numeric(12, 6), nullable=False, default=Decimal("0")
+    )
+    # With twenty analysts sharing one sidebar the good investigations get
+    # buried within a week. Pinned threads sort above everything else.
+    pinned: Mapped[bool] = mapped_column(nullable=False, default=False)
+    # Free-form labels. An incident or case number is just a tag by
+    # convention ("INC-1234"), which keeps one mechanism instead of two.
+    tags: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
     created_at: Mapped[datetime] = _created()
     updated_at: Mapped[datetime] = mapped_column(
         TimestampCol,
@@ -116,7 +131,11 @@ class Conversation(Base):
         back_populates="conversation", cascade="all, delete-orphan"
     )
 
-    __table_args__ = (Index("ix_conversations_session_updated", "session_id", "updated_at"),)
+    __table_args__ = (
+        Index("ix_conversations_session_updated", "session_id", "updated_at"),
+        # The sidebar's own ordering: pinned first, then most recent.
+        Index("ix_conversations_pinned_updated", "pinned", "updated_at"),
+    )
 
 
 class Message(Base):
@@ -150,6 +169,10 @@ class Message(Base):
     # error the one part of the transcript they cannot go back and read.
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     token_usage: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    # What this turn cost, at the rates in force when it ran. Null when the
+    # model has no configured price — an absent number an operator can notice,
+    # rather than a plausible one that is wrong.
+    cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(12, 6), nullable=True)
     model: Mapped[str | None] = mapped_column(String(120), nullable=True)
     seq: Mapped[int] = mapped_column(Integer, nullable=False)
     created_at: Mapped[datetime] = _created()
@@ -199,6 +222,36 @@ class ToolInvocation(Base):
         CheckConstraint(f"status IN {INVOCATION_STATUSES}", name="ck_invocations_status"),
         Index("ix_invocations_conversation", "conversation_id", "created_at"),
         Index("ix_invocations_tool_call_id", "tool_call_id"),
+    )
+
+
+class MessageFeedback(Base):
+    """Whether an answer was any good, per analyst.
+
+    One row per analyst per message rather than a counter on the message: in a
+    shared workspace several people read the same answer, and "three analysts
+    trusted this, one did not" is the signal worth having. It also makes a vote
+    changeable without losing who cast it.
+    """
+
+    __tablename__ = "message_feedback"
+
+    id: Mapped[uuid.UUID] = _pk()
+    message_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("messages.id", ondelete="CASCADE"), nullable=False
+    )
+    session_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("anon_sessions.id", ondelete="SET NULL"), nullable=True
+    )
+    rating: Mapped[str] = mapped_column(String(8), nullable=False)
+    # Why. Optional, and the more useful half when it is filled in.
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = _created()
+
+    __table_args__ = (
+        CheckConstraint(f"rating IN {FEEDBACK_RATINGS}", name="ck_feedback_rating"),
+        UniqueConstraint("message_id", "session_id", name="uq_feedback_message_session"),
+        Index("ix_feedback_message", "message_id"),
     )
 
 

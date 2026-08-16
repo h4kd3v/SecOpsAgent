@@ -147,7 +147,6 @@ async def test_a_failed_turn_is_still_findable_in_the_sidebar(db, wired, monkeyp
         raise AssertionError("the model must not be asked to title a failed turn")
 
     monkeypatch.setattr(llm, "stream_completion", explodes)
-    monkeypatch.setattr(llm, "generate_title", never_call_me)
 
     ctx = await make_context(db)
     [e async for e in run_turn(ctx, "why are these alerts firing on WIN-FIN-04")]

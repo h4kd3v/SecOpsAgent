@@ -7,13 +7,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import current_session
-from app.db.models import AnonSession, Conversation, ToolInvocation
+from app.db.models import AnonSession, Conversation, Message, ToolInvocation
 from app.db.session import get_db
 from app.schemas import (
     AppConfigOut,
     ToolCatalogOut,
     ConversationDetail,
     ConversationOut,
+    FeedbackRequest,
     InvocationOut,
     MessageOut,
     RenameRequest,
@@ -80,9 +81,11 @@ async def list_conversations(
     query = select(Conversation).where(Conversation.archived.is_(False))
     if not settings.shared_workspace:
         query = query.where(Conversation.session_id == session.id)
-    # Newest first: the thread someone just spoke in is the one the shift cares
-    # about. The UI groups by day and preserves this order inside each group.
-    result = await db.execute(query.order_by(Conversation.updated_at.desc()).limit(200))
+    # Pinned first, then newest: the thread someone just spoke in is the one
+    # the shift cares about, except for the ones deliberately kept to hand.
+    result = await db.execute(
+        query.order_by(Conversation.pinned.desc(), Conversation.updated_at.desc()).limit(200)
+    )
     conversations = list(result.scalars().all())
     return await _with_authors(db, conversations)
 
@@ -127,10 +130,16 @@ async def get_conversation(
     # Who said what, for a thread several analysts may have contributed to.
     authors = {m.author_session_id for m in messages if m.author_session_id}
     labels = await repo.session_labels(db, authors | {conversation.session_id})
+    ratings = await repo.feedback_for(db, conversation.id, session.id)
 
     def as_out(message) -> MessageOut:
         out = MessageOut.model_validate(message, from_attributes=True)
         out.author_label = labels.get(message.author_session_id)
+        tally = ratings.get(message.id)
+        if tally:
+            out.feedback_up = tally.get("up", 0)
+            out.feedback_down = tally.get("down", 0)
+            out.my_feedback = tally.get("mine")
         return out
 
     return ConversationDetail(
@@ -187,8 +196,35 @@ async def rename_conversation(
     session: AnonSession = Depends(current_session),
     db: AsyncSession = Depends(get_db),
 ) -> Conversation:
-    conversation = await authored_conversation(conversation_id, session, db)
-    conversation.title = payload.title
+    # Renaming and tagging are collaborative and reversible, so any analyst
+    # may do them; archiving is not, and stays with whoever started the thread.
+    conversation = await owned_conversation(conversation_id, session, db)
+    if payload.title is not None:
+        conversation.title = payload.title
+    if payload.pinned is not None:
+        conversation.pinned = payload.pinned
+    if payload.tags is not None:
+        # Trimmed, de-duplicated, order preserved: "INC-1 , inc-1" is one tag
+        # typed twice, and a sidebar chip of whitespace helps nobody.
+        seen: set[str] = set()
+        cleaned: list[str] = []
+        for tag in payload.tags:
+            label = " ".join(tag.split())[:40]
+            key = label.lower()
+            if label and key not in seen:
+                seen.add(key)
+                cleaned.append(label)
+        conversation.tags = cleaned
+    await repo.audit(
+        db,
+        "conversation.updated",
+        session_id=session.id,
+        detail={
+            "conversation_id": str(conversation.id),
+            "fields": [f for f in ("title", "pinned", "tags")
+                       if getattr(payload, f) is not None],
+        },
+    )
     await db.flush()
     await repo.notify_conversation(db, conversation, "conversation_updated")
     await db.commit()
@@ -245,6 +281,65 @@ async def list_tools(
 ) -> ToolCatalogOut:
     """Served from the cached catalogue unless it is older than the TTL."""
     return await _catalog(db, force=False)
+
+
+@router.put("/conversations/{conversation_id}/messages/{message_id}/feedback")
+async def rate_message(
+    conversation_id: uuid.UUID,
+    message_id: uuid.UUID,
+    payload: FeedbackRequest,
+    session: AnonSession = Depends(current_session),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, object]:
+    """Record whether an answer was any good.
+
+    One vote per analyst per answer, changeable. In a shared workspace several
+    people read the same answer, and their agreement — or disagreement — is
+    the signal worth keeping.
+    """
+    message = await _answer_in(conversation_id, message_id, session, db)
+    await repo.set_feedback(db, message.id, session.id, payload.rating, payload.note)
+    await repo.audit(
+        db,
+        "message.rated",
+        session_id=session.id,
+        detail={"message_id": str(message.id), "rating": payload.rating},
+    )
+    await db.commit()
+    tally = (await repo.feedback_for(db, conversation_id, session.id)).get(message.id, {})
+    return {"up": tally.get("up", 0), "down": tally.get("down", 0), "mine": tally.get("mine")}
+
+
+@router.delete("/conversations/{conversation_id}/messages/{message_id}/feedback")
+async def unrate_message(
+    conversation_id: uuid.UUID,
+    message_id: uuid.UUID,
+    session: AnonSession = Depends(current_session),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, object]:
+    message = await _answer_in(conversation_id, message_id, session, db)
+    await repo.clear_feedback(db, message.id, session.id)
+    await db.commit()
+    tally = (await repo.feedback_for(db, conversation_id, session.id)).get(message.id, {})
+    return {"up": tally.get("up", 0), "down": tally.get("down", 0), "mine": None}
+
+
+async def _answer_in(
+    conversation_id: uuid.UUID,
+    message_id: uuid.UUID,
+    session: AnonSession,
+    db: AsyncSession,
+) -> Message:
+    """An assistant turn in a thread this session may see."""
+    await owned_conversation(conversation_id, session, db)
+    message = await db.get(Message, message_id)
+    if message is None or message.conversation_id != conversation_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Message not found")
+    if message.role != "assistant":
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "Only the assistant's answers can be rated."
+        )
+    return message
 
 
 @router.post("/tools/refresh", response_model=ToolCatalogOut)

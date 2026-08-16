@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -28,10 +29,24 @@ class ConversationOut(BaseModel):
     # sidebar shows other analysts' investigations alongside your own.
     author_session_id: uuid.UUID | None = None
     author_label: str | None = None
+    # Money, at the rates in force when each turn ran.
+    cost_usd: Decimal = Decimal("0")
+    pinned: bool = False
+    tags: list[str] = Field(default_factory=list)
 
 
 class RenameRequest(BaseModel):
-    title: str = Field(min_length=1, max_length=255)
+    """Any field left out is left alone, so renaming does not clear tags."""
+
+    title: str | None = Field(default=None, min_length=1, max_length=255)
+    pinned: bool | None = None
+    # Short labels; an incident number is just one of these by convention.
+    tags: list[str] | None = Field(default=None, max_length=12)
+
+
+class FeedbackRequest(BaseModel):
+    rating: Literal["up", "down"]
+    note: str | None = Field(default=None, max_length=2000)
 
 
 class InvocationOut(BaseModel):
@@ -70,7 +85,13 @@ class MessageOut(BaseModel):
     created_at: datetime
     # {prompt_tokens, completion_tokens, total_tokens, estimated?}
     token_usage: dict[str, Any] | None = None
+    cost_usd: Decimal | None = None
     model: str | None = None
+    # How the shift rated this answer. `mine` is this analyst's own vote, so
+    # the UI can show it as cast rather than as available.
+    feedback_up: int = 0
+    feedback_down: int = 0
+    my_feedback: str | None = None
 
 
 class ConversationDetail(BaseModel):

@@ -49,7 +49,6 @@ async def stack(monkeypatch):
 
     monkeypatch.setattr(agent_loop, "mcp_manager", FakeMcp())
     monkeypatch.setattr(catalog_module, "mcp_manager", FakeMcp())
-    monkeypatch.setattr(llm, "generate_title", lambda *a: _title())
 
     async def answers(messages, tools, on_token, on_reasoning=None, on_tool_delta=None):
         await on_token("Checked.")
@@ -135,20 +134,40 @@ async def test_another_analyst_can_continue_the_investigation(stack):
 
 
 async def test_only_the_analyst_who_started_a_thread_can_archive_it(stack):
-    """Reading and contributing are shared; removing is not. One mis-click
-    should not take somebody's investigation out of nineteen sidebars."""
+    """Removing is destructive and irreversible from the sidebar's point of
+    view, so it stays with whoever started the thread. One mis-click should not
+    take somebody's investigation out of nineteen sidebars."""
     alice, bob = await analyst(), await analyst()
     try:
         created = (await alice.post("/api/conversations")).json()["id"]
         await _ask(alice, created, "mine")
 
         assert (await bob.delete(f"/api/conversations/{created}")).status_code == 403
-        assert (
-            await bob.patch(f"/api/conversations/{created}", json={"title": "renamed"})
-        ).status_code == 403
-
         assert (await alice.delete(f"/api/conversations/{created}")).status_code == 204
         assert (await bob.get("/api/conversations")).json() == []
+    finally:
+        await alice.aclose()
+        await bob.aclose()
+
+
+async def test_anyone_may_retitle_or_tag_a_shared_thread(stack):
+    """Renaming and tagging are collaborative and reversible. Whoever picks up
+    an incident should be able to label it without hunting down whoever
+    happened to type the first message."""
+    alice, bob = await analyst(), await analyst()
+    try:
+        created = (await alice.post("/api/conversations")).json()["id"]
+        await _ask(alice, created, "something vague")
+
+        response = await bob.patch(
+            f"/api/conversations/{created}",
+            json={"title": "WIN-FIN-04 lateral movement", "tags": ["INC-4471"]},
+        )
+        assert response.status_code == 200
+
+        row = (await alice.get("/api/conversations")).json()[0]
+        assert row["title"] == "WIN-FIN-04 lateral movement"
+        assert row["tags"] == ["INC-4471"]
     finally:
         await alice.aclose()
         await bob.aclose()

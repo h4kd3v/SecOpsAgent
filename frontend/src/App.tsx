@@ -82,6 +82,16 @@ export default function App() {
     if (activeId === id) setActiveId(null);
   };
 
+  // Renames, pins and tags all land on the same endpoint, and all of them
+  // reach the other analysts' sidebars over /api/events — so there is nothing
+  // to update locally, the broadcast does it.
+  const update = async (
+    id: string,
+    changes: { title?: string; pinned?: boolean; tags?: string[] },
+  ) => {
+    await api.updateConversation(id, changes);
+  };
+
 
   // `busy` only goes true once the stream opens, which is after a round trip.
   // Two quick clicks on the prompt cards both saw `busy === false`, each
@@ -143,6 +153,7 @@ export default function App() {
           onSelect={setActiveId}
           onNew={newConversation}
           onArchive={archive}
+          onUpdate={update}
           onOpenSettings={() => setShowSettings(true)}
         />
         <ChatView

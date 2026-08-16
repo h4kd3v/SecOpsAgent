@@ -140,6 +140,34 @@ export const IconPulse = ({ size, className }: Props) => (
   </svg>
 );
 
+export const IconThumbUp = ({ size, className }: Props) => (
+  <svg {...wrap(size, className)}>
+    <path d="M7 21V10l4.5-7a2 2 0 0 1 2.9 2.2L13.5 9H19a2 2 0 0 1 2 2.4l-1.4 7A2 2 0 0 1 17.6 20H7z" />
+    <path d="M7 10H4a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h3" />
+  </svg>
+);
+
+export const IconThumbDown = ({ size, className }: Props) => (
+  <svg {...wrap(size, className)}>
+    <path d="M17 3v11l-4.5 7a2 2 0 0 1-2.9-2.2l.9-3.8H5a2 2 0 0 1-2-2.4l1.4-7A2 2 0 0 1 6.4 4H17z" />
+    <path d="M17 14h3a1 1 0 0 0 1-1V4a1 1 0 0 0-1-1h-3" />
+  </svg>
+);
+
+export const IconPin = ({ size, className }: Props) => (
+  <svg {...wrap(size, className)}>
+    <path d="M15 3.5 20.5 9l-3 1-4 4-.7 3.6L8 13.2 4.4 12l3.6-.7 4-4z" />
+    <path d="m8 13.2-4.5 7.3" />
+  </svg>
+);
+
+export const IconPencil = ({ size, className }: Props) => (
+  <svg {...wrap(size, className)}>
+    <path d="M4 20h4l10.5-10.5a2.1 2.1 0 0 0-3-3L5 17v3z" />
+    <path d="m14.5 6 3 3" />
+  </svg>
+);
+
 export const IconKey = ({ size, className }: Props) => (
   <svg {...wrap(size, className)}>
     <circle cx="8" cy="15" r="4" />

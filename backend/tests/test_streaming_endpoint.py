@@ -86,7 +86,6 @@ async def wired(monkeypatch):
             return await db.get(AnonSession, session_id)
 
     app.dependency_overrides[current_session] = override
-    monkeypatch.setattr(llm, "generate_title", lambda *a: _title())
 
     transport = ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -363,7 +362,9 @@ async def test_a_saved_conversation_reopens_with_everything_intact(wired, monkey
     roles = [m["role"] for m in reopened["messages"]]
     assert roles == ["user", "assistant", "tool", "assistant"]
     assert reopened["messages"][-1]["content"] == "Findings below."
-    assert reopened["conversation"]["title"] == "Test conversation"
+    # Titled from the prompt as the first message was written, not from a
+    # model call after the fact.
+    assert reopened["conversation"]["title"] == "hello"
 
     invocation = reopened["invocations"][0]
     assert invocation["tool_name"] == "search_udm"

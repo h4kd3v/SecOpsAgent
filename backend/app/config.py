@@ -28,7 +28,6 @@ class Settings(BaseSettings):
     llm_proxy_url: str = ""
     llm_api_key: str = ""
     llm_model_name: str = ""
-    llm_title_model_name: str = ""
     # Human-readable label shown under each answer, e.g. "Claude Opus 4.6".
     # Empty = show whatever model id the gateway reports, which is the honest
     # default but is often an internal alias.
@@ -43,6 +42,12 @@ class Settings(BaseSettings):
     # a low cap truncates answers mid-sentence and looks exactly like a
     # streaming bug (watch for finish_reason="length" in the UI warning).
     llm_max_output_tokens: int = 0
+    # Per-million-token rates, as `model=input/output` entries separated by
+    # commas: "gpt-4.1=2.00/8.00,claude-opus-5=5.00/25.00". A model with no
+    # entry records no cost rather than a wrong one. `*` is a fallback for
+    # everything unlisted. Rates are stored on each turn as they were applied,
+    # so changing them here never rewrites what past turns cost.
+    llm_model_pricing: str = ""
     # 0 = pass MCP results to the model in full, which is the default: the
     # model decides what matters, and it can't reason about data it never saw.
     tool_result_max_chars: int = 0
@@ -135,8 +140,20 @@ class Settings(BaseSettings):
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
     @property
-    def title_model(self) -> str:
-        return self.llm_title_model_name or self.llm_model_name
+    def pricing_table(self) -> dict[str, tuple[float, float]]:
+        """model -> (input $/1M, output $/1M)."""
+        table: dict[str, tuple[float, float]] = {}
+        for entry in self.llm_model_pricing.split(","):
+            entry = entry.strip()
+            if not entry or "=" not in entry:
+                continue
+            name, _, rates = entry.partition("=")
+            given, _, output = rates.partition("/")
+            try:
+                table[name.strip()] = (float(given), float(output or given))
+            except ValueError:
+                continue
+        return table
 
     @property
     def scope_list(self) -> list[str]:

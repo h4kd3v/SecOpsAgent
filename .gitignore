@@ -10,6 +10,12 @@ secrets/*
 sa.json
 *.sa.json
 
+# Database dumps. These hold every analyst's prompts, the model's answers and
+# the SecOps data returned to them — the most sensitive content the app has.
+# Keep the folder so the backup script has somewhere to write on a fresh clone.
+backups/*
+!backups/.gitkeep
+
 __pycache__/
 *.py[cod]
 .venv/

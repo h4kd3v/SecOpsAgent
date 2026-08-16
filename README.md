@@ -403,6 +403,79 @@ TEST_DATABASE_URL='postgresql+asyncpg://test:test@localhost:55433/test' \
 
 ---
 
+## What is stored, and how long it survives
+
+Everything the app knows lives in one Postgres database, in the Docker volume
+`secops-agent_pgdata`. The compose file pins the project name, so the volume
+name does not change if the directory is renamed.
+
+### The tables
+
+| Table | One row per | Holds |
+|---|---|---|
+| `anon_sessions` | browser | the label shown in the sidebar, user-agent, source IP, first and last seen. No name, no email, no password — there is no registration |
+| `conversations` | thread | title, owning session, archived flag, created/updated |
+| `messages` | turn | role, the analyst's prompt or the model's answer, the model's reasoning, the tool calls it asked for, why a turn failed, token usage, model id, ordering |
+| `tool_invocations` | MCP call | tool name, the exact arguments the model sent, the full result, error, status, whether it was a write, latency, and which session it belonged to |
+| `audit_events` | security event | tool executed, tool denied, approval requested, conversation archived, completion failed (with the raw provider payload), MCP unreachable, tools refreshed |
+| `mcp_tool_catalog` | MCP server | the cached tool definitions and when they were fetched |
+| `alembic_version` | database | which migration the schema is at |
+
+Two things are deliberately kept apart from `content`: `reasoning`, so the
+model's working is shown as working rather than as the answer, and `error`, so
+a failure is styled as a failure. Neither is replayed to the model.
+
+Nothing is ever hard-deleted by normal use. Archiving sets a flag — the tool
+invocations under a thread are an audit record and outlive the analyst's
+interest in the chat. The only automatic deletion is the startup sweep of
+conversations that never received a message.
+
+### What survives what
+
+Verified on this stack, not assumed:
+
+| Event | Chats survive? |
+|---|---|
+| `docker compose restart` | yes |
+| container killed (`docker kill`, OOM, crash) | yes |
+| `docker compose down` then `up` | yes |
+| `docker compose up --build`, image rebuilds | yes |
+| host reboot | yes |
+| **`docker compose down -v`** | **no — this deletes the volume** |
+| `docker volume rm secops-agent_pgdata`, `docker volume prune` | no |
+| disk failure, rebuilt machine | no |
+
+Shutdown is clean: the Postgres image stops on `SIGINT`, which is a fast
+shutdown with a checkpoint, so a normal stop does not leave the cluster in
+recovery.
+
+`down -v` is the one command that destroys chat history. There is no
+confirmation prompt — it is `down` with two extra characters.
+
+### Backups
+
+A volume survives restarts; it does not survive `down -v`, a pruned volume, or
+a dead disk. For that there are dumps:
+
+```bash
+./scripts/backup-db.sh              # timestamped dump into ./backups
+./scripts/backup-db.sh /mnt/nas     # somewhere that is not this disk
+./scripts/restore-db.sh backups/secops-chat-20260817-014744.sql.gz
+```
+
+The dump includes `alembic_version`, so a restore lands on a schema the app
+agrees with. `backups/` is gitignored: those files contain every prompt, every
+answer and every row SecOps returned.
+
+Nightly, via cron:
+
+```
+0 2 * * * cd /path/to/SecOpsAgent && ./scripts/backup-db.sh >> backups/cron.log 2>&1
+```
+
+An untested restore is not a backup. `restore-db.sh` stops the backend, replays
+the dump and starts it again; try it once against a copy before you need it.
+
 ## Operational notes
 
 **Streaming.** SSE, not WebSockets — one-way token flow, survives corporate

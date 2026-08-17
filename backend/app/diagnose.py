@@ -55,8 +55,23 @@ async def check_llm() -> bool:
 
     try:
         models = await llm.get_client().models.list()
-        names = [m.id for m in models.data][:5]
-        ok(f"reachable, {len(models.data)} models (e.g. {', '.join(names)})")
+        offered = [m.id for m in models.data]
+        ok(f"reachable, {len(offered)} models (e.g. {', '.join(offered[:5])})")
+
+        # The single most useful check when swapping LLM_MODEL_NAME: the
+        # gateway either offers that id or it does not, and a 404 mid-turn is a
+        # slow way to find out.
+        wanted = settings.llm_model_name
+        if wanted and offered:
+            if any(name == wanted or name.startswith(wanted) for name in offered):
+                ok(f"'{wanted}' is offered by this gateway")
+            else:
+                near = [n for n in offered if wanted.split("-")[0].lower() in n.lower()][:5]
+                bad(f"'{wanted}' is NOT offered by this gateway")
+                if near:
+                    print(f"    did you mean: {', '.join(near)}")
+                else:
+                    print(f"    it offers: {', '.join(offered[:10])}")
     except Exception as exc:  # noqa: BLE001
         # Listing models is often blocked even when completions work fine.
         warn(f"models.list failed: {type(exc).__name__}: {exc}")

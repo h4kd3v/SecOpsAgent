@@ -197,6 +197,26 @@ class Settings(BaseSettings):
             required["SECRET_KEY"] = self.secret_key
         return sorted(name for name, value in required.items() if not value)
 
+    def display_name_looks_stale(self) -> bool:
+        """Does LLM_MODEL_DISPLAY_NAME still describe LLM_MODEL_NAME?
+
+        The label is typed by hand and does not follow the model. Change the
+        model and forget the label, and every new answer is attributed to the
+        model that used to serve them — the exact mislabelling the per-message
+        model id exists to prevent.
+
+        Deliberately loose: it only fires when the two share no meaningful word
+        at all, which catches "GPT-4.1" left over on a Claude deployment while
+        staying quiet for "Claude Opus 4.6" against `claude-opus-4-6`.
+        """
+        if not self.llm_model_display_name or not self.llm_model_name:
+            return False
+        words = {w for w in re.split(r"[^a-z0-9]+", self.llm_model_display_name.lower()) if len(w) > 2}
+        served = re.sub(r"[^a-z0-9]+", "", self.llm_model_name.lower())
+        if not words:
+            return False
+        return not any(word in served for word in words)
+
     def missing_recommended(self) -> list[str]:
         """Not fatal, but the real SecOps MCP server rejects calls without
         them. Absent when pointing at some other MCP server for a smoke test,

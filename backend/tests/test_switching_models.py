@@ -181,3 +181,29 @@ async def test_cost_stops_rather_than_guessing_when_a_new_model_has_no_rate(
         assert costs[1] is None, "an unpriced model was billed at another model's rate"
     finally:
         await alice.aclose()
+
+
+def test_a_stale_display_name_is_flagged():
+    """The label is typed by hand and does not follow the model. Left over from
+    the previous one, it attributes every new answer to a model that never saw
+    them — which is the mislabelling the per-message model id exists to
+    prevent, reintroduced by hand."""
+    stale = get_settings().model_copy(
+        update={"llm_model_name": "claude-opus-4-6", "llm_model_display_name": "GPT-4.1"}
+    )
+    assert stale.display_name_looks_stale()
+
+
+def test_a_matching_display_name_is_not_nagged_about():
+    """Loose on purpose: a label is prose, not an id, and warning about
+    "Claude Opus 4.6" on `claude-opus-4-6` would train people to ignore it."""
+    for model, label in [
+        ("claude-opus-4-6", "Claude Opus 4.6"),
+        ("gpt-4.1", "GPT-4.1"),
+        ("gemini-2.5-pro", "Gemini 2.5 Pro"),
+        ("gpt-4.1", ""),
+    ]:
+        settings = get_settings().model_copy(
+            update={"llm_model_name": model, "llm_model_display_name": label}
+        )
+        assert not settings.display_name_looks_stale(), f"{label!r} vs {model!r}"

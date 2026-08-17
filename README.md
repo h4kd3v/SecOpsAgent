@@ -353,7 +353,7 @@ TEST_DATABASE_URL='postgresql+asyncpg://test:test@localhost:55433/test' \
     .venv/bin/pytest tests -q                  # + integration tests
 ```
 
-151 tests covering the things that actually bite:
+153 tests covering the things that actually bite:
 
 - **Streaming, through the real ASGI app over HTTP** — all 500 chunks of a long
   answer arrive (not just the first), content containing raw newlines, blank
@@ -469,9 +469,29 @@ rather than on saving the file. Conversations survive the switch — history fro
 one model is just messages to the next, and the turn after a switch replays the
 earlier ones normally.
 
+`LLM_MODEL_NAME` is the only place the model is chosen — nothing else needs
+editing for the switch itself. Check it landed with:
+
+```bash
+docker compose exec backend python -m app.diagnose
+  ✓ reachable, 118 models (e.g. gpt-4.1, gpt-4o, …)
+  ✓ 'gpt-4.1' is offered by this gateway
+```
+
+It says so plainly when the id is not one the gateway serves, which beats
+finding out from a 404 mid-investigation. The name has to be the id your
+gateway uses, and the gateway has to offer it: OpenAI's endpoint will not serve
+a Claude model however it is spelled. Behind LiteLLM it is whatever alias the
+proxy defines.
+
 What each turn records is the model that actually served it, not the one
-configured now, so a thread spanning a change reads honestly. Two consequences
-worth knowing:
+configured now, so a thread spanning a change reads honestly. Three
+consequences worth knowing:
+
+* **The display name does not follow.** `LLM_MODEL_DISPLAY_NAME` is a label
+  typed by hand; left over from the previous model it attributes every new
+  answer to one that never saw them. Startup warns when the two have drifted
+  apart; leaving it empty shows the id the gateway reports.
 
 * **Pricing is per model.** Switch without adding a rate for the new one and
   cost recording stops rather than billing it at the old model's price.

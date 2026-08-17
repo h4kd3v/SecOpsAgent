@@ -114,6 +114,15 @@ async def lifespan(app: FastAPI):
 
         demo.install()
     else:
+        if settings.display_name_looks_stale():
+            log.warning(
+                "LLM_MODEL_DISPLAY_NAME is %r but LLM_MODEL_NAME is %r. The label "
+                "is shown under every new answer and does not follow the model — "
+                "update it, or leave it empty to show the id the gateway reports.",
+                settings.llm_model_display_name,
+                settings.llm_model_name,
+            )
+
         missing = settings.missing_required()
         if missing:
             log.error(

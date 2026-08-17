@@ -353,7 +353,7 @@ TEST_DATABASE_URL='postgresql+asyncpg://test:test@localhost:55433/test' \
     .venv/bin/pytest tests -q                  # + integration tests
 ```
 
-153 tests covering the things that actually bite:
+167 tests covering the things that actually bite:
 
 - **Streaming, through the real ASGI app over HTTP** — all 500 chunks of a long
   answer arrive (not just the first), content containing raw newlines, blank
@@ -605,6 +605,36 @@ Nightly, via cron:
 
 An untested restore is not a backup. `restore-db.sh` stops the backend, replays
 the dump and starts it again; try it once against a copy before you need it.
+
+## What the model is told
+
+One system prompt leads every completion. It covers grounding (never invent a
+hostname, IP, case ID, count or timestamp — every factual claim must come from
+a tool result), asking rather than assuming (no invented parameter values, ask
+for a missing time range), scope (no shell, no filesystem, no reading config or
+environment variables or credentials, never ask an analyst to paste a secret),
+and method (one precise query over several broad ones, state the time window,
+summarise rather than paste raw results).
+
+Five more messages are injected only when their situation arises: MCP being
+unreachable, a declined write, a turn stopped mid-tool-call, a truncated tool
+result, and a call to a tool that does not exist. Each exists because the
+alternative is worse — without the declined-write message the model retries the
+action it was just refused.
+
+**The prompt is not the security control.** It shapes behaviour; it does not
+enforce it. What enforces is that no filesystem or shell tool is offered to the
+model at all, that every state-changing tool is approval-gated before it runs
+(25 of Chronicle's 70, including `execute_actions` and `execute_manual_action`),
+that `TOOL_ALLOWLIST` can narrow what is offered, and that the backend runs as a
+non-root container with no host mounts beyond a read-only `sa.json`. A prompt
+persuades; those decide.
+
+Replace the whole thing with `SYSTEM_PROMPT_FILE` — an organisation's naming
+conventions, escalation policy and house rules do not belong in this
+repository. Read once at startup; a broken or empty path logs an error and
+falls back to the built-in, because a completion with no system message is an
+agent with no rules at all.
 
 ## Operational notes
 

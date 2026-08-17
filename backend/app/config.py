@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     # everything unlisted. Rates are stored on each turn as they were applied,
     # so changing them here never rewrites what past turns cost.
     llm_model_pricing: str = ""
+    # Path to a file replacing the built-in system prompt. The most
+    # deployment-specific text in the app: house rules, naming conventions and
+    # escalation policy belong to an organisation, not to this repository.
+    # Read once at startup, so edits land on a backend restart.
+    system_prompt_file: str = ""
     # 0 = pass MCP results to the model in full, which is the default: the
     # model decides what matters, and it can't reason about data it never saw.
     tool_result_max_chars: int = 0

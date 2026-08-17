@@ -166,6 +166,7 @@ export default function App() {
           warning={chat.warning}
           totalTokens={chat.totalTokens}
           modelDisplayName={config?.model_display_name ?? ""}
+          configuredModel={config?.model_name ?? ""}
           sessionInitials={initials}
           sessionLabel={session.label}
           conversationId={activeId}

@@ -32,6 +32,7 @@ settings = get_settings()
 @router.get("/config", response_model=AppConfigOut)
 async def app_config(_: AnonSession = Depends(current_session)) -> AppConfigOut:
     return AppConfigOut(
+        model_name=settings.llm_model_name,
         model_display_name=settings.llm_model_display_name,
         require_approval_for_write=settings.require_approval_for_write,
         demo_mode=settings.demo_mode,

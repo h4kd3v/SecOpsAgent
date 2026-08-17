@@ -30,6 +30,7 @@ interface Props {
   warning: string | null;
   totalTokens: number;
   modelDisplayName: string;
+  configuredModel: string;
   sessionInitials: string;
   sessionLabel: string;
   conversationId: string | null;
@@ -189,6 +190,7 @@ export function ChatView(props: Props) {
                     usage={message.token_usage}
                     cost={message.cost_usd}
                     displayNameOverride={props.modelDisplayName}
+                    configuredModel={props.configuredModel}
                   />
                 </div>
                 )}

@@ -72,6 +72,8 @@ export interface ToolCatalog {
 }
 
 export interface AppConfig {
+  /** The id currently configured, for spotting answers from an earlier model. */
+  model_name: string;
   model_display_name: string;
   require_approval_for_write: boolean;
   demo_mode: boolean;

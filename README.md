@@ -353,7 +353,7 @@ TEST_DATABASE_URL='postgresql+asyncpg://test:test@localhost:55433/test' \
     .venv/bin/pytest tests -q                  # + integration tests
 ```
 
-147 tests covering the things that actually bite:
+151 tests covering the things that actually bite:
 
 - **Streaming, through the real ASGI app over HTTP** — all 500 chunks of a long
   answer arrive (not just the first), content containing raw newlines, blank
@@ -460,6 +460,25 @@ Tokens are recorded twice, on purpose:
 * **Per thread**, in `conversations.prompt_tokens / completion_tokens /
   total_tokens`, folded in as each turn commits — the same transaction as the
   message it counts, so the two cannot drift.
+
+### Changing the model
+
+`LLM_MODEL_NAME` can be changed whenever you like; the app reads it once at
+startup, so the change lands on `docker compose up -d --force-recreate backend`
+rather than on saving the file. Conversations survive the switch — history from
+one model is just messages to the next, and the turn after a switch replays the
+earlier ones normally.
+
+What each turn records is the model that actually served it, not the one
+configured now, so a thread spanning a change reads honestly. Two consequences
+worth knowing:
+
+* **Pricing is per model.** Switch without adding a rate for the new one and
+  cost recording stops rather than billing it at the old model's price.
+* **Context budgets are not.** `LLM_MAX_CONTEXT_CHARS` is a character count,
+  not a fraction of the model's window; moving to a smaller-context model may
+  need it lowered. The failure is reported as such rather than as a broken
+  stream.
 
 ### Cost
 

@@ -105,6 +105,10 @@ class ConversationDetail(BaseModel):
 class AppConfigOut(BaseModel):
     """UI-relevant server settings, fetched once on boot."""
 
+    # The id currently configured. The UI needs it to tell whether an answer
+    # came from today's model or an earlier one, because the display name is a
+    # label for the former only.
+    model_name: str
     model_display_name: str
     require_approval_for_write: bool
     demo_mode: bool
